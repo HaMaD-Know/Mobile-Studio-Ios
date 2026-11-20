@@ -94,8 +94,7 @@ final class StudioCoreTests: XCTestCase {
     }
 
     func testMeshV2() throws {
-        var d = Data("version 2.00
-".utf8)
+        var d = Data("version 2.00".utf8) + Data([10])
         func u16(_ v: Int) { d.append(UInt8(v & 255)); d.append(UInt8(v >> 8)) }
         func i32(_ v: Int) { for k in 0..<4 { d.append(UInt8((v >> (8 * k)) & 255)) } }
         func f32(_ f: Float) { i32(Int(f.bitPattern)) }
