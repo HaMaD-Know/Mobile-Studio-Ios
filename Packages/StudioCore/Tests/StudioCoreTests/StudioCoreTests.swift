@@ -92,4 +92,26 @@ final class StudioCoreTests: XCTestCase {
         XCTAssertEqual(PartData.color(p).rgb8.0, 255)
         XCTAssertEqual(Enums.display(prop: "Material", value: 272), "SmoothPlastic")
     }
+
+    func testMeshV2() throws {
+        var d = Data("version 2.00
+".utf8)
+        func u16(_ v: Int) { d.append(UInt8(v & 255)); d.append(UInt8(v >> 8)) }
+        func i32(_ v: Int) { for k in 0..<4 { d.append(UInt8((v >> (8 * k)) & 255)) } }
+        func f32(_ f: Float) { i32(Int(f.bitPattern)) }
+        u16(12); d.append(36); d.append(12); i32(3); i32(1)
+        for (x, y) in [(0, 0), (1, 0), (0, 1)] as [(Float, Float)] {
+            f32(x); f32(y); f32(0); f32(0); f32(0); f32(1); f32(x); f32(y); f32(0)
+        }
+        i32(0); i32(1); i32(2)
+        let m = try MeshFile.parse(d)
+        XCTAssertEqual(m.vertexCount, 3)
+        XCTAssertEqual(m.max, [1, 1, 0])
+    }
+
+    func testCsgDeltaIndices() throws {
+        // +2, -1 (one byte each), +100000 (three bytes)
+        let b: [UInt8] = [2, 127, 0x81, 0x86, 0xA0]
+        XCTAssertEqual(try CsgMesh.decodeDeltaIndices(b, 0, b.count, 3), [2, 1, 100001])
+    }
 }

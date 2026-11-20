@@ -51,6 +51,8 @@ final class SceneRenderer: NSObject, MTKViewDelegate {
     private var meshes: [ShapeKind: GPUMesh] = [:]
     private var overlayMeshes: [OverlayMesh: GPUMesh] = [:]
     private let textures = MaterialTextures()
+    private let meshCache = MeshCache()
+    private let textureCache = AssetTextures()
     private var whiteTex: MTLTexture!
     private var surfTex: MTLTexture?
     private let inflight = DispatchSemaphore(value: 3)
@@ -73,7 +75,8 @@ final class SceneRenderer: NSObject, MTKViewDelegate {
         let vd = MTLVertexDescriptor()
         vd.attributes[0].format = .float3; vd.attributes[0].offset = 0; vd.attributes[0].bufferIndex = 0
         vd.attributes[1].format = .float3; vd.attributes[1].offset = 12; vd.attributes[1].bufferIndex = 0
-        vd.layouts[0].stride = 24
+        vd.attributes[2].format = .float2; vd.attributes[2].offset = 24; vd.attributes[2].bufferIndex = 0
+        vd.layouts[0].stride = 32
 
         func pipe(_ vs: String, _ fs: String, blend: Bool, vertexDesc: MTLVertexDescriptor?) throws -> MTLRenderPipelineState {
             let d = MTLRenderPipelineDescriptor()
@@ -168,37 +171,61 @@ final class SceneRenderer: NSObject, MTKViewDelegate {
             horizon: SIMD4(0.78, 0.86, 0.96, 1), zenith: SIMD4(0.36, 0.58, 0.92, 1),
             params: SIMD4(lighting.ambient, 1.0, Float(Date().timeIntervalSince(start)), surfTex == nil ? 0 : 1))
 
-        // Build part instances, grouped by (shape, texture key) and opaque vs transparent.
-        struct Group { var shape: ShapeKind; var tex: String?; var hasNormal: Bool; var items: [PartInstance] }
+        // Build part instances, grouped by (mesh, textures) and opaque vs transparent.
+        struct Group { var mesh: GPUMesh; var color: MTLTexture?; var normal: MTLTexture?; var items: [PartInstance] }
         var opaque: [String: Group] = [:], transparent: [String: Group] = [:]
+        meshCache.device = device
         for p in store.renderParts() {
             let t = PartData.transparency(p)
             if t >= 0.999 { continue }
-            let shape: ShapeKind
-            switch PartData.shape(p) {
-            case .ball: shape = .ball
-            case .cylinder: shape = .cylinder
-            case .wedge: shape = .wedge
-            case .cornerWedge: shape = .cornerWedge
-            case .block: shape = .box
-            }
             let cf = PartData.cframe(p), size = PartData.size(p)
             let material = PartData.material(p)
-            let tex = textures.names(for: material)
             let c = PartData.color(p)
-            var inst = PartInstance(
-                model: cf.matrix(scale: size), rotation: cf.rotationOnly.matrix(),
-                color: SIMD4(c.r, c.g, c.b, 1 - t), size: SIMD4(size.simd, 0),
-                surfA: SIMD4(surf(p, "RightSurface"), surf(p, "TopSurface"), surf(p, "BackSurface"), 0),
-                surfB: SIMD4(surf(p, "LeftSurface"), surf(p, "BottomSurface"), surf(p, "FrontSurface"), 0),
-                mat: MaterialTextures.params(material),
-                extra: SIMD4(material == 288 ? 1 : 0, tex.color != nil ? 1 : 0, 1 / 8, tex.normal != nil ? 1 : 0))
-            if shape == .ball { inst.size = SIMD4(size.simd, 0) }
-            let key = "\(shape.rawValue)|\(tex.color ?? "")|\(tex.normal ?? "")"
-            if t > 0.001 {
-                transparent[key, default: Group(shape: shape, tex: tex.key, hasNormal: tex.normal != nil, items: [])].items.append(inst)
+            var model = cf.matrix(scale: size)
+            var meshKey: String
+            var mesh: GPUMesh
+            var colorTex: MTLTexture?, normalTex: MTLTexture?
+            var texMode: Float = 0
+            var surfaces = true
+            if let custom = meshCache.drawable(for: p) {
+                mesh = custom.mesh
+                meshKey = custom.key
+                model = custom.model(cf, size)
+                surfaces = false
+                if let tid = custom.texture, let tx = textureCache.texture(for: tid, device: device) {
+                    colorTex = tx; texMode = 2; meshKey += "|" + tid
+                }
             } else {
-                opaque[key, default: Group(shape: shape, tex: tex.key, hasNormal: tex.normal != nil, items: [])].items.append(inst)
+                let shape: ShapeKind
+                switch PartData.shape(p) {
+                case .ball: shape = .ball
+                case .cylinder: shape = .cylinder
+                case .wedge: shape = .wedge
+                case .cornerWedge: shape = .cornerWedge
+                case .block: shape = .box
+                }
+                mesh = meshes[shape]!
+                meshKey = "shape\(shape.rawValue)"
+            }
+            if texMode == 0 {
+                let tex = textures.names(for: material)
+                let tx = textures.textures(for: tex.key)
+                colorTex = tex.color != nil ? tx.color : nil
+                normalTex = tex.normal != nil ? tx.normal : nil
+                texMode = colorTex != nil ? 1 : 0
+                meshKey += "|\(tex.key ?? "")"
+            }
+            let inst = PartInstance(
+                model: model, rotation: cf.rotationOnly.matrix(),
+                color: SIMD4(c.r, c.g, c.b, 1 - t), size: SIMD4(size.simd, 0),
+                surfA: surfaces ? SIMD4(surf(p, "RightSurface"), surf(p, "TopSurface"), surf(p, "BackSurface"), 0) : .zero,
+                surfB: surfaces ? SIMD4(surf(p, "LeftSurface"), surf(p, "BottomSurface"), surf(p, "FrontSurface"), 0) : .zero,
+                mat: MaterialTextures.params(material),
+                extra: SIMD4(material == 288 ? 1 : 0, texMode, 1 / 8, normalTex != nil ? 1 : 0))
+            if t > 0.001 {
+                transparent[meshKey, default: Group(mesh: mesh, color: colorTex, normal: normalTex, items: [])].items.append(inst)
+            } else {
+                opaque[meshKey, default: Group(mesh: mesh, color: colorTex, normal: normalTex, items: [])].items.append(inst)
             }
         }
         let overlays = store.overlays()
@@ -235,14 +262,13 @@ final class SceneRenderer: NSObject, MTKViewDelegate {
         enc.setCullMode(.none)
         func drawGroups(_ groups: [String: Group]) {
             for g in groups.values where !g.items.isEmpty {
-                guard let mesh = meshes[g.shape] else { continue }
+                let mesh = g.mesh
                 let o = put(g.items)
-                let tx = textures.textures(for: g.tex)
                 enc.setVertexBuffer(mesh.buffer, offset: 0, index: 0)
                 enc.setVertexBuffer(buf, offset: o, index: 2)
                 enc.setFragmentBuffer(buf, offset: o, index: 2)
-                enc.setFragmentTexture(tx.color ?? whiteTex, index: 0)
-                enc.setFragmentTexture(tx.normal ?? whiteTex, index: 1)
+                enc.setFragmentTexture(g.color ?? whiteTex, index: 0)
+                enc.setFragmentTexture(g.normal ?? whiteTex, index: 1)
                 enc.setFragmentTexture(surfTex ?? whiteTex, index: 2)
                 enc.drawPrimitives(type: mesh.primitive, vertexStart: 0, vertexCount: mesh.vertexCount, instanceCount: g.items.count)
             }

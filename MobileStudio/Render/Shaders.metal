@@ -27,7 +27,7 @@ struct PartInstance {
     float4 extra;       // x emissive, y textured, z tex scale, w has normal map
 };
 
-struct VIn { float3 pos [[attribute(0)]]; float3 nrm [[attribute(1)]]; };
+struct VIn { float3 pos [[attribute(0)]]; float3 nrm [[attribute(1)]]; float2 uv [[attribute(2)]]; };
 
 struct VOut {
     float4 position [[position]];
@@ -37,6 +37,7 @@ struct VOut {
     float3 localN;
     float3 tangent;
     float3 bitangent;
+    float2 uv;
     uint inst [[flat]];
 };
 
@@ -54,6 +55,7 @@ vertex VOut part_vs(VIn in [[stage_in]], constant Frame& f [[buffer(1)]],
     bool yF = an.y > an.x && an.y > an.z; bool xF = !yF && an.x > an.z;
     o.tangent = (p.rotation * float4(yF ? float3(1, 0, 0) : (xF ? float3(0, 0, 1) : float3(1, 0, 0)), 0)).xyz;
     o.bitangent = (p.rotation * float4(yF ? float3(0, 0, 1) : float3(0, 1, 0), 0)).xyz;
+    o.uv = in.uv;
     o.inst = iid;
     return o;
 }
@@ -142,7 +144,12 @@ fragment float4 part_fs(VOut in [[stage_in]], bool front [[front_facing]],
                      : (xFace ? (in.localN.x > 0.0 ? p.surfA.x : p.surfB.x) : (in.localN.z > 0.0 ? p.surfA.z : p.surfB.z));
 
     float type = mat.x;
-    if (p.extra.y > 0.5) {
+    if (p.extra.y > 1.5) {
+        // MeshPart / SpecialMesh texture with the mesh's own UVs.
+        float4 t = matTex.sample(smp, in.uv);
+        c = mix(c, t.rgb, t.a);
+        type = 0.0;
+    } else if (p.extra.y > 0.5) {
         float2 tuv = float2(uv.x, -uv.y) * p.extra.z;
         c *= matTex.sample(smp, tuv).rgb * 1.08;
         type = 0.0;

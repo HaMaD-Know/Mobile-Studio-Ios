@@ -343,7 +343,10 @@ final class InstanceAPI {
         let stored = PropAccess.resolve(inst, key)
         let existing = inst.props[stored]
         let pv = try PropAccess.fromScript(v, existing: existing, type: inst.propTypes[stored], inst: inst, prop: stored)
+        let before = inst.props[stored]
         inst.set(stored, pv)
+        // Instances outside the DataModel get no tree notifications; scripts still expect Changed.
+        if inst.root() !== rt.dm && before != pv { rt.propChanged(inst, stored) }
         if inst.className == "Sound", stored == "Playing" {
             if case .bool(true) = pv { rt.host?.playSound(inst) } else { rt.host?.stopSound(inst) }
         }

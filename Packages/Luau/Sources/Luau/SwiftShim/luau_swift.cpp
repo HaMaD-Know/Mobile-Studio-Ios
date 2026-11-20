@@ -42,12 +42,17 @@ static void interrupt(lua_State* L, int gc)
 extern "C" void luau_swift_set_deadline(double deadline) { g_deadline = deadline; }
 extern "C" void luau_swift_install_interrupt(lua_State* L) { lua_callbacks(L)->interrupt = interrupt; }
 
+// Globals whose members change at runtime: never resolve `game.X.Y` style chains at load time
+// (same list Roblox uses).
+static const char* kMutableGlobals[] = {"Game", "Workspace", "game", "plugin", "script", "shared", "workspace", "_G", nullptr};
+
 extern "C" char* luau_swift_compile(const char* source, size_t size, size_t* outsize)
 {
     lua_CompileOptions opts;
     memset(&opts, 0, sizeof(opts));
     opts.optimizationLevel = 1;
     opts.debugLevel = 1;
+    opts.mutableGlobals = kMutableGlobals;
     return luau_compile(source, size, &opts, outsize);
 }
 

@@ -1,7 +1,8 @@
 import Metal
 import simd
+import StudioCore
 
-/// GPU mesh: interleaved float3 position + float3 normal, drawn as a triangle list.
+/// GPU mesh: interleaved float3 position + float3 normal + float2 uv (32 bytes), triangle list.
 struct GPUMesh {
     let buffer: MTLBuffer
     let vertexCount: Int
@@ -15,7 +16,7 @@ enum MeshFactory {
         /// A point inside the solid; flat triangles are oriented to face away from it.
         var inside = SIMD3<Float>(0, 0, 0)
 
-        mutating func vert(_ p: SIMD3<Float>, _ n: SIMD3<Float>) { data += [p.x, p.y, p.z, n.x, n.y, n.z] }
+        mutating func vert(_ p: SIMD3<Float>, _ n: SIMD3<Float>) { data += [p.x, p.y, p.z, n.x, n.y, n.z, 0, 0] }
 
         mutating func tri(_ a: SIMD3<Float>, _ b: SIMD3<Float>, _ c: SIMD3<Float>) {
             var n = simd_normalize(simd_cross(b - a, c - a))
@@ -30,11 +31,17 @@ enum MeshFactory {
         }
         func upload(_ device: MTLDevice, _ prim: MTLPrimitiveType = .triangle) -> GPUMesh {
             let buf = device.makeBuffer(bytes: data, length: max(4, data.count * 4), options: .storageModeShared)!
-            return GPUMesh(buffer: buf, vertexCount: data.count / 6, primitive: prim)
+            return GPUMesh(buffer: buf, vertexCount: data.count / 8, primitive: prim)
         }
     }
 
     static func v(_ x: Float, _ y: Float, _ z: Float) -> SIMD3<Float> { SIMD3(x, y, z) }
+
+    /// Upload a parsed mesh (MeshData already holds 8 floats per vertex).
+    static func upload(_ d: MTLDevice, _ m: MeshData) -> GPUMesh? {
+        guard !m.vertices.isEmpty, let buf = d.makeBuffer(bytes: m.vertices, length: m.vertices.count * 4, options: .storageModeShared) else { return nil }
+        return GPUMesh(buffer: buf, vertexCount: m.vertexCount, primitive: .triangle)
+    }
 
     static func cube(_ d: MTLDevice) -> GPUMesh {
         var b = Builder()
