@@ -18,6 +18,19 @@ Core tests: `swift test --package-path Packages/StudioCore`
 No Mac? `.github/workflows/ios.yml` runs the tests and a simulator build on GitHub's macOS
 runners on every push (see the repository's Actions tab).
 
+## Install on an iPhone from Windows
+
+Every CI run also builds an unsigned `MobileStudio.ipa`.
+
+1. Open the latest run under **Actions**. Download **MobileStudio-unsigned-ipa** from
+   *Artifacts* and unzip it.
+2. Install [Sideloadly](https://sideloadly.io) and iTunes, and connect the iPhone by USB.
+3. Drag `MobileStudio.ipa` into Sideloadly, enter your Apple ID, and click **Start**.
+4. On the iPhone, trust your Apple ID under *Settings → General → VPN & Device Management*.
+   On iOS 16 and later, also turn on *Settings → Privacy & Security → Developer Mode*.
+
+With a free Apple ID the app expires after 7 days. Re-install it with Sideloadly to renew.
+
 ## Layout
 
 | Path | What it is | Ported from (Android) |
