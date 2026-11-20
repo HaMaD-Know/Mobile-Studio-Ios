@@ -1,0 +1,72 @@
+# XcodeGen spec. On a Mac:  brew install xcodegen && cd ios && xcodegen && open MobileStudio.xcodeproj
+name: MobileStudio
+options:
+  bundleIdPrefix: com.exampletest
+  deploymentTarget:
+    iOS: "17.0"
+  createIntermediateGroups: true
+packages:
+  StudioCore:
+    path: Packages/StudioCore
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    MARKETING_VERSION: "1.0"
+    CURRENT_PROJECT_VERSION: "1"
+targets:
+  MobileStudio:
+    type: application
+    platform: iOS
+    sources:
+      - path: MobileStudio
+        excludes:
+          - Resources/materials
+      - path: MobileStudio/Resources/materials
+        type: folder
+        buildPhase: resources
+    dependencies:
+      - package: StudioCore
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.exampletest.mobilestudio
+        TARGETED_DEVICE_FAMILY: "1,2"
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents: YES
+        INFOPLIST_KEY_UISupportedInterfaceOrientations: "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
+        INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad: "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
+        INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace: YES
+        INFOPLIST_KEY_UIFileSharingEnabled: YES
+        INFOPLIST_KEY_CFBundleDisplayName: Mobile Studio
+        CODE_SIGN_STYLE: Automatic
+    info:
+      path: MobileStudio/Info.plist
+      properties:
+        CFBundleDisplayName: Mobile Studio
+        LSSupportsOpeningDocumentsInPlace: true
+        UIFileSharingEnabled: true
+        UILaunchScreen: {}
+        CFBundleDocumentTypes:
+          - CFBundleTypeName: Roblox Place
+            LSHandlerRank: Alternate
+            LSItemContentTypes: [com.exampletest.mobilestudio.rbxl, com.exampletest.mobilestudio.rbxlx]
+          - CFBundleTypeName: Roblox Model
+            LSHandlerRank: Alternate
+            LSItemContentTypes: [com.exampletest.mobilestudio.rbxm, com.exampletest.mobilestudio.rbxmx]
+        UTImportedTypeDeclarations:
+          - UTTypeIdentifier: com.exampletest.mobilestudio.rbxl
+            UTTypeDescription: Roblox Place
+            UTTypeConformsTo: [public.data]
+            UTTypeTagSpecification: { public.filename-extension: [rbxl] }
+          - UTTypeIdentifier: com.exampletest.mobilestudio.rbxlx
+            UTTypeDescription: Roblox XML Place
+            UTTypeConformsTo: [public.xml]
+            UTTypeTagSpecification: { public.filename-extension: [rbxlx] }
+          - UTTypeIdentifier: com.exampletest.mobilestudio.rbxm
+            UTTypeDescription: Roblox Model
+            UTTypeConformsTo: [public.data]
+            UTTypeTagSpecification: { public.filename-extension: [rbxm] }
+          - UTTypeIdentifier: com.exampletest.mobilestudio.rbxmx
+            UTTypeDescription: Roblox XML Model
+            UTTypeConformsTo: [public.xml]
+            UTTypeTagSpecification: { public.filename-extension: [rbxmx] }

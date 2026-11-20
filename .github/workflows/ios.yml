@@ -1,0 +1,19 @@
+# Builds the iOS port on a GitHub-hosted Mac (no Mac needed locally).
+# Copy this folder's contents to the root of a GitHub repository (or move .github to the repo root
+# and prefix the paths below with ios/), then push.
+name: iOS build
+on: [push, workflow_dispatch]
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Core unit tests
+        run: swift test --package-path Packages/StudioCore
+      - name: Generate Xcode project
+        run: brew install xcodegen && xcodegen
+      - name: Build for simulator
+        run: |
+          xcodebuild -project MobileStudio.xcodeproj -scheme MobileStudio \
+            -destination 'generic/platform=iOS Simulator' \
+            CODE_SIGNING_ALLOWED=NO build
