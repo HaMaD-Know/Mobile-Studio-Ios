@@ -137,6 +137,40 @@ enum MeshFactory {
         return b.upload(d)
     }
 
+    /// Unit cube whose faces sample regions of Roblox's 585x559 clothing template
+    /// (port of engine/ClothingCompositor.kt). Regions are (x, y, w, h) in template pixels, keyed
+    /// "F", "B", "L", "R", "U", "D" (front = -Z, right = +X).
+    static func clothedBox(_ d: MTLDevice, _ regions: [String: (Float, Float, Float, Float)]) -> GPUMesh {
+        // Corners TL, TR, BR, BL as seen from outside each face.
+        let faces: [(String, SIMD3<Float>, [SIMD3<Float>])] = [
+            ("F", v(0, 0, -1), [v(0.5, 0.5, -0.5), v(-0.5, 0.5, -0.5), v(-0.5, -0.5, -0.5), v(0.5, -0.5, -0.5)]),
+            ("B", v(0, 0, 1), [v(-0.5, 0.5, 0.5), v(0.5, 0.5, 0.5), v(0.5, -0.5, 0.5), v(-0.5, -0.5, 0.5)]),
+            ("R", v(1, 0, 0), [v(0.5, 0.5, 0.5), v(0.5, 0.5, -0.5), v(0.5, -0.5, -0.5), v(0.5, -0.5, 0.5)]),
+            ("L", v(-1, 0, 0), [v(-0.5, 0.5, -0.5), v(-0.5, 0.5, 0.5), v(-0.5, -0.5, 0.5), v(-0.5, -0.5, -0.5)]),
+            ("U", v(0, 1, 0), [v(-0.5, 0.5, 0.5), v(0.5, 0.5, 0.5), v(0.5, 0.5, -0.5), v(-0.5, 0.5, -0.5)]),
+            ("D", v(0, -1, 0), [v(-0.5, -0.5, -0.5), v(0.5, -0.5, -0.5), v(0.5, -0.5, 0.5), v(-0.5, -0.5, 0.5)]),
+        ]
+        var data: [Float] = []
+        for (key, n, c) in faces {
+            let r = regions[key] ?? (0, 0, 1, 1)
+            let u0 = r.0 / 585, v0 = r.1 / 559, u1 = (r.0 + r.2) / 585, v1 = (r.1 + r.3) / 559
+            let uv: [SIMD2<Float>] = [SIMD2(u0, v0), SIMD2(u1, v0), SIMD2(u1, v1), SIMD2(u0, v1)]
+            for i in [0, 1, 2, 0, 2, 3] {
+                data += [c[i].x, c[i].y, c[i].z, n.x, n.y, n.z, uv[i].x, uv[i].y]
+            }
+        }
+        return GPUMesh(buffer: d.makeBuffer(bytes: data, length: data.count * 4, options: .storageModeShared)!, vertexCount: data.count / 8, primitive: .triangle)
+    }
+
+    static let torsoRegions: [String: (Float, Float, Float, Float)] = [
+        "F": (231, 74, 128, 128), "B": (427, 74, 128, 128), "R": (165, 74, 64, 128), "L": (361, 74, 64, 128),
+        "U": (231, 8, 128, 64), "D": (231, 204, 128, 64)]
+    static func limbRegions(right: Bool) -> [String: (Float, Float, Float, Float)] {
+        let (f, l, b, r): (Float, Float, Float, Float) = right ? (217, 19, 85, 151) : (308, 374, 440, 506)
+        return ["F": (f, 355, 64, 128), "L": (l, 355, 64, 128), "B": (b, 355, 64, 128), "R": (r, 355, 64, 128),
+                "U": (f, 289, 64, 64), "D": (f, 485, 64, 64)]
+    }
+
     /// Unit quad in the XY plane facing +Z, uv (0,0) top-left.
     static func quad(_ d: MTLDevice) -> GPUMesh {
         let v: [Float] = [

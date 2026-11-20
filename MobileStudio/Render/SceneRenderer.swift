@@ -14,6 +14,8 @@ final class SceneRenderer: NSObject, MTKViewDelegate {
         var horizon: SIMD4<Float>
         var zenith: SIMD4<Float>
         var params: SIMD4<Float>
+        var shadowVP: simd_float4x4
+        var shadowOn: SIMD4<Float>
     }
     struct PartInstance {
         var model: simd_float4x4
@@ -45,6 +47,9 @@ final class SceneRenderer: NSObject, MTKViewDelegate {
     private var partBlendPipeline: MTLRenderPipelineState!
     private var skyPipeline: MTLRenderPipelineState!
     private var overlayPipeline: MTLRenderPipelineState!
+    private var shadowPipeline: MTLRenderPipelineState!
+    private var shadowMap: MTLTexture!
+    var shadowsEnabled = true
     private var decalPipeline: MTLRenderPipelineState!
     private var quadMesh: GPUMesh!
     private var depthWrite: MTLDepthStencilState!
@@ -102,6 +107,15 @@ final class SceneRenderer: NSObject, MTKViewDelegate {
         skyPipeline = try pipe("sky_vs", "sky_fs", blend: false, vertexDesc: nil)
         overlayPipeline = try pipe("overlay_vs", "overlay_fs", blend: true, vertexDesc: vd)
         decalPipeline = try pipe("decal_vs", "decal_fs", blend: true, vertexDesc: vd)
+        let sp = MTLRenderPipelineDescriptor()
+        sp.vertexFunction = lib.makeFunction(name: "shadow_vs")
+        sp.vertexDescriptor = vd
+        sp.depthAttachmentPixelFormat = .depth32Float
+        shadowPipeline = try device.makeRenderPipelineState(descriptor: sp)
+        let sd0 = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .depth32Float, width: 2048, height: 2048, mipmapped: false)
+        sd0.usage = [.renderTarget, .shaderRead]
+        sd0.storageMode = .private
+        shadowMap = device.makeTexture(descriptor: sd0)
         quadMesh = MeshFactory.quad(device)
 
         func depth(_ write: Bool, _ test: Bool) -> MTLDepthStencilState {
@@ -174,7 +188,9 @@ final class SceneRenderer: NSObject, MTKViewDelegate {
             lightDir: SIMD4(lighting.sunDir, 0),
             sunColor: SIMD4(lighting.sunColor, 0),
             horizon: SIMD4(0.78, 0.86, 0.96, 1), zenith: SIMD4(0.36, 0.58, 0.92, 1),
-            params: SIMD4(lighting.ambient, 1.0, Float(Date().timeIntervalSince(start)), surfTex == nil ? 0 : 1))
+            params: SIMD4(lighting.ambient, 1.0, Float(Date().timeIntervalSince(start)), surfTex == nil ? 0 : 1),
+            shadowVP: SceneRenderer.shadowMatrix(camera: camCF, sun: lighting.sunDir),
+            shadowOn: SIMD4(shadowsEnabled ? 1 : 0, 0, 0, 0))
 
         // Build part instances, grouped by (mesh, textures) and opaque vs transparent.
         struct Group { var mesh: GPUMesh; var color: MTLTexture?; var normal: MTLTexture?; var items: [PartInstance] }
@@ -235,9 +251,17 @@ final class SceneRenderer: NSObject, MTKViewDelegate {
         }
         // Decals / Textures: one quad per face, grouped by image.
         var decals: [String: (MTLTexture, [DecalInstance])] = [:]
-        for p in store.renderParts() where !p.children.isEmpty {
+        for p in store.renderParts() where !p.children.isEmpty || p.name == "Torso" || p.name == "UpperTorso" {
             let cf = PartData.cframe(p), size = PartData.size(p)
-            for d in p.children where d.className == "Decal" || d.className == "Texture" {
+            var faceItems = p.children.filter { $0.className == "Decal" || $0.className == "Texture" }
+            // T-shirt graphic on the torso front (ShirtGraphic in the character).
+            if (p.name == "Torso" || p.name == "UpperTorso"), let tee = p.parent?.findFirstChildOfClass("ShirtGraphic") {
+                let d = Instance("Decal")
+                d.set("Texture", tee.get("Graphic") ?? .string(""), notify: false)
+                d.set("Face", .enumValue(EnumValue(5)), notify: false)
+                faceItems.append(d)
+            }
+            for d in faceItems {
                 let img = (d.get("Texture") ?? d.get("ColorMapContent"))?.description ?? ""
                 guard !img.isEmpty, let tex = textureCache.texture(for: img, device: device) else { continue }
                 let face = Int(d.get("Face")?.asEnum ?? 5)
@@ -275,9 +299,30 @@ final class SceneRenderer: NSObject, MTKViewDelegate {
         }
         let frameOffset = put([frame])
 
-        guard let cmd = queue.makeCommandBuffer(), let enc = cmd.makeRenderCommandEncoder(descriptor: rpd) else {
-            inflight.signal(); return
+        guard let cmd = queue.makeCommandBuffer() else { inflight.signal(); return }
+        // Opaque instance data is uploaded once and shared by the shadow and main passes.
+        let opaqueList: [(Group, Int)] = opaque.values.filter { !$0.items.isEmpty }.map { ($0, put($0.items)) }
+        if shadowsEnabled {
+            let spd = MTLRenderPassDescriptor()
+            spd.depthAttachment.texture = shadowMap
+            spd.depthAttachment.loadAction = .clear
+            spd.depthAttachment.storeAction = .store
+            spd.depthAttachment.clearDepth = 1
+            if let se = cmd.makeRenderCommandEncoder(descriptor: spd) {
+                se.setRenderPipelineState(shadowPipeline)
+                se.setDepthStencilState(depthWrite)
+                se.setCullMode(.none)
+                se.setVertexBuffer(buf, offset: frameOffset, index: 1)
+                for (g, o) in opaqueList {
+                    se.setVertexBuffer(g.mesh.buffer, offset: 0, index: 0)
+                    se.setVertexBuffer(buf, offset: o, index: 2)
+                    se.drawPrimitives(type: g.mesh.primitive, vertexStart: 0, vertexCount: g.mesh.vertexCount, instanceCount: g.items.count)
+                }
+                se.endEncoding()
+            }
         }
+        guard let enc = cmd.makeRenderCommandEncoder(descriptor: rpd) else { cmd.commit(); inflight.signal(); return }
+        enc.setFragmentTexture(shadowMap, index: 3)
         enc.setFragmentSamplerState(sampler, index: 0)
         enc.setVertexBuffer(buf, offset: frameOffset, index: 1)
         enc.setFragmentBuffer(buf, offset: frameOffset, index: 1)
@@ -289,10 +334,9 @@ final class SceneRenderer: NSObject, MTKViewDelegate {
 
         // Parts
         enc.setCullMode(.none)
-        func drawGroups(_ groups: [String: Group]) {
-            for g in groups.values where !g.items.isEmpty {
+        func drawGroups(_ groups: [(Group, Int)]) {
+            for (g, o) in groups {
                 let mesh = g.mesh
-                let o = put(g.items)
                 enc.setVertexBuffer(mesh.buffer, offset: 0, index: 0)
                 enc.setVertexBuffer(buf, offset: o, index: 2)
                 enc.setFragmentBuffer(buf, offset: o, index: 2)
@@ -304,7 +348,7 @@ final class SceneRenderer: NSObject, MTKViewDelegate {
         }
         enc.setRenderPipelineState(partPipeline)
         enc.setDepthStencilState(depthWrite)
-        drawGroups(opaque)
+        drawGroups(opaqueList)
         // Decals sit 0.01 studs above the face, drawn after opaque geometry.
         enc.setRenderPipelineState(decalPipeline)
         enc.setDepthStencilState(depthReadOnly)
@@ -317,7 +361,7 @@ final class SceneRenderer: NSObject, MTKViewDelegate {
         }
         enc.setRenderPipelineState(partBlendPipeline)
         enc.setDepthStencilState(depthReadOnly)
-        drawGroups(transparent)
+        drawGroups(transparent.values.filter { !$0.items.isEmpty }.map { ($0, put($0.items)) })
 
         // Overlays: depth-tested ones first, then always-on-top.
         enc.setRenderPipelineState(overlayPipeline)
@@ -338,6 +382,23 @@ final class SceneRenderer: NSObject, MTKViewDelegate {
     }
 
     private func surf(_ p: Instance, _ name: String) -> Float { Float(p.get(name)?.asEnum ?? 0) }
+
+    /// Orthographic sun projection covering ~220 studs around what the camera looks at.
+    static func shadowMatrix(camera: CFrame, sun: SIMD3<Float>) -> simd_float4x4 {
+        let centre = camera.position + camera.lookVector * 60
+        let half: Float = 110, depth: Float = 800
+        let eye = centre + Vector3(sun) * (depth / 2)
+        let view = CFrame.lookAt(eye, centre, up: abs(sun.y) > 0.99 ? .zAxis : .yAxis).inverse.matrix()
+        var ortho = simd_float4x4(diagonal: SIMD4(1 / half, 1 / half, -1 / depth, 1))
+        ortho.columns.3 = SIMD4(0, 0, 0, 1)
+        var vp = ortho * view
+        // Snap to texels so shadows don't shimmer while the camera moves.
+        let texel = 2 / Float(2048)
+        let origin = vp * SIMD4<Float>(0, 0, 0, 1)
+        vp.columns.3.x -= origin.x - (origin.x / texel).rounded() * texel
+        vp.columns.3.y -= origin.y - (origin.y / texel).rounded() * texel
+        return vp
+    }
 
     /// Local frame of a part face (quad +Z = outward normal) and its width/height in studs.
     static func faceFrame(_ face: Int, _ s: Vector3) -> (CFrame, Float, Float) {

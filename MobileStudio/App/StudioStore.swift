@@ -295,6 +295,11 @@ final class StudioStore: ObservableObject, TreeListener {
             }
         }
         session.onSound = { [weak self] sound, on in self?.audio.set(sound, playing: on) }
+        if UserDefaults.standard.object(forKey: "useMyAvatar") as? Bool ?? true, let uid = AccountStore.shared.userId {
+            Task { [weak session] in
+                if let spec = await AvatarLoader.load(userId: uid) { session?.avatar = spec }
+            }
+        }
         session.assetLoader = { id, done in
             AssetCache.shared.fetch(id) { url in done(url.flatMap { try? Data(contentsOf: $0) }) }
         }

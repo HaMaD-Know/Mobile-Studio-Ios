@@ -118,6 +118,7 @@ struct EditorView: View {
             ViewportView(store: store, multiSelect: multiSelect)
                 .ignoresSafeArea(edges: .bottom)
                 .overlay(alignment: .topLeading) { toolPicker.padding(10) }
+                .overlay(alignment: .topTrailing) { PluginWidgetsView(store: store) }
                 .overlay(alignment: .bottomLeading) {
                     if showFly { FlyPad(store: store).padding(.leading, 12).padding(.bottom, hSize == .regular ? 16 : 110) }
                 }

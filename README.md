@@ -1,4 +1,4 @@
-# Mobile Studio for iOS (phase 1: core editor)
+# Mobile Studio for iOS
 
 This is a Swift/SwiftUI/Metal port of the Android app `com.exampletest.mobilestudiotest`. It was
 rebuilt from the decompiled APK, which is in `../_decompiled/` (`sources/` is the raw jadx
@@ -43,28 +43,24 @@ With a free Apple ID the app expires after 7 days. Re-install it with Sideloadly
 | `MobileStudio/UI` | Start screen, viewport gestures, Move/Scale/Rotate handles, Explorer, Properties, Output, simple script editor | `ui/*` |
 | `MobileStudio/Resources/materials` | Material textures, copied unchanged from the APK's `assets/materials` | |
 
-## Phase 1 scope
+## What's ported
 
-**Ported:** opening `.rbxl/.rbxlx/.rbxm/.rbxmx` from Files, creating new places (Baseplate,
-Classic and Empty), rendering parts (block, sphere, cylinder, wedge and corner wedge with
-materials and surfaces), select (tap, multi-select, select inside models), Move/Scale/Rotate
-handles with snapping, Explorer (expand, filter, rename, drag to reparent, context menu),
-Properties (typed editors, multi-edit), insert part or object, undo/redo, save `.rbxl`, and
-export the selection as `.rbxm`.
+- **Editor:** open/save `.rbxl/.rbxlx/.rbxm/.rbxmx`, new place templates, Explorer, Properties,
+  Move/Scale/Rotate with snapping, undo/redo, insert objects, Toolbox, plugins (toolbar buttons,
+  settings, dock widgets), command bar, Luau script editor (highlighting, autocomplete, syntax check).
+- **Rendering:** parts with materials and surfaces, MeshParts / SpecialMeshes (mesh v1-v7 incl. Draco),
+  unions (CSG v2-v6), decals and textures, sun shadows, sky.
+- **Scripting (Luau 0.744):** Roblox data types, Instance API, ~40 services, task scheduler, signals,
+  require, tweens, DataStores (in memory), HttpService (when HttpEnabled).
+- **Play mode:** R6 and R15 characters with Roblox's default animations, your Roblox avatar
+  (body colours, shirts, pants, T-shirts, accessories, face) when signed in, physics with joints,
+  touches, camera, tools, prompts, chat, leaderstats, ScreenGuis/BillboardGuis/SurfaceGuis.
+- **Roblox account:** sign in, Open Cloud API key, open your places, publish.
 
-**Not ported yet (later phases):**
-- Luau runtime and Play mode: `lua/*` (about 18k lines, built on LuaJ) and `engine/PlaySession`
-- Avatars and animation: `engine/Avatar`, `AnimPlayer`
-- Physics and collisions
-- Audio
-- Meshes: MeshPart, unions, CSG and Draco. These currently draw as boxes.
-- GUI overlay, SurfaceGuis and decals
-- Shadow maps and procedural materials
-- Roblox account login, cloud publish and Toolbox (`net/*`)
-- Plugins
-- XML *writing*: `.rbxlx` files are saved as binary `.rbxl`
-- Syntax highlighting and autocomplete in the script editor
-- The long `InstanceFactory.extraDefaults` table
+## Known limits
 
-**Not verified:** this code was written on Windows without a Swift compiler. Expect a round of
-small compile fixes the first time it is built in Xcode.
+- Physics is simplified (translation-only rigid bodies, no rotation dynamics).
+- SurfaceGuis are drawn as screen overlays over their face, not rendered into the 3D surface.
+- R15 uses a blocky rig; R15 body meshes from your avatar aren't loaded (accessories are).
+- Solid modeling (Union/Negate) isn't available; Draco edgebreaker meshes are skipped (as on Android).
+- Purchases, teleports and server/client separation aren't simulated.

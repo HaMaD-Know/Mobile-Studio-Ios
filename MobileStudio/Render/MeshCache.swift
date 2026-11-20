@@ -18,7 +18,33 @@ final class MeshCache {
     private var states: [String: State] = [:]
     weak var device: MTLDevice?
 
+    private var clothes: [String: GPUMesh] = [:]
+
+    /// R6 body parts wearing a Shirt / Pants draw with the clothing template.
+    private func clothing(for p: Instance) -> Drawable? {
+        guard let ch = p.parent, ch.isA("Model"), let device else { return nil }
+        let shirt = ch.findFirstChildOfClass("Shirt")?.get("ShirtTemplate")?.description
+        let pants = ch.findFirstChildOfClass("Pants")?.get("PantsTemplate")?.description
+        let (key, tex): (String, String?)
+        switch p.name {
+        case "Torso": (key, tex) = ("torso", shirt ?? pants)
+        case "Left Arm": (key, tex) = ("left", shirt)
+        case "Right Arm": (key, tex) = ("right", shirt)
+        case "Left Leg": (key, tex) = ("left", pants)
+        case "Right Leg": (key, tex) = ("right", pants)
+        default: return nil
+        }
+        guard let tex, !tex.isEmpty else { return nil }
+        let mesh = clothes[key] ?? {
+            let m = MeshFactory.clothedBox(device, key == "torso" ? MeshFactory.torsoRegions : MeshFactory.limbRegions(right: key == "right"))
+            clothes[key] = m
+            return m
+        }()
+        return Drawable(key: "clothes:" + key, mesh: mesh, texture: tex) { cf, size in cf.matrix(scale: size) }
+    }
+
     func drawable(for p: Instance) -> Drawable? {
+        if let c = clothing(for: p) { return c }
         if p.className == "MeshPart" {
             guard let id = PartData.meshContent(p), let r = ready("mesh:" + id, fetch: { AssetCache.shared.data(for: id) }, start: { done in
                 AssetCache.shared.fetch(id) { url in done(url != nil) }

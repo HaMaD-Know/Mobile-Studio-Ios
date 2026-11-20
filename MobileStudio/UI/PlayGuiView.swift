@@ -14,7 +14,7 @@ struct PlayGuiView: View {
         ZStack(alignment: .topLeading) {
             Color.clear.allowsHitTesting(false)
             ForEach(Array(items.enumerated()), id: \.offset) { _, it in
-                GuiItemView(item: it, play: play)
+                GuiItemView(item: it, play: .play(play))
                     .frame(width: CGFloat(max(0, it.w)), height: CGFloat(max(0, it.h)))
                     .rotationEffect(.degrees(Double(it.rotation)))
                     .position(x: CGFloat(it.x + it.w / 2), y: CGFloat(it.y + it.h / 2))
@@ -40,9 +40,24 @@ private extension Color3 {
     func color(_ a: Float = 1) -> Color { Color(red: Double(r), green: Double(g), blue: Double(b)).opacity(Double(max(0, min(1, a)))) }
 }
 
+/// Input callbacks for GUI items (Play session or plugin widgets).
+struct GuiActions {
+    var press: (Instance, Bool) -> Void = { _, _ in }
+    var activate: (Instance) -> Void = { _ in }
+    var text: (Instance, String) -> Void = { _, _ in }
+    var focus: (Instance) -> Void = { _ in }
+    var scroll: (Instance, Float, Float) -> Void = { _, _, _ in }
+
+    static func play(_ p: PlaySession) -> GuiActions {
+        GuiActions(press: { p.guiPress($0, down: $1) }, activate: { p.guiActivate($0) },
+                   text: { p.guiText($0, $1, enter: true) }, focus: { p.guiFocus($0) },
+                   scroll: { p.guiScroll($0, dx: $1, dy: $2) })
+    }
+}
+
 struct GuiItemView: View {
     let item: GuiItem
-    let play: PlaySession
+    let play: GuiActions
     @State private var editing = ""
     @State private var image: UIImage?
 
@@ -63,8 +78,8 @@ struct GuiItemView: View {
             case .text, .textButton:
                 textView(item.text)
             case .textBox:
-                TextField("", text: $editing, onEditingChanged: { began in if began { play.guiFocus(item.inst) } })
-                    .onSubmit { play.guiText(item.inst, editing, enter: true) }
+                TextField("", text: $editing, onEditingChanged: { began in if began { play.focus(item.inst) } })
+                    .onSubmit { play.text(item.inst, editing) }
                     .font(font)
                     .foregroundStyle(item.textColor.color(item.textAlpha))
                     .multilineTextAlignment(alignment)
@@ -77,14 +92,14 @@ struct GuiItemView: View {
         .contentShape(Rectangle())
         .allowsHitTesting(isInteractive)
         .gesture(DragGesture(minimumDistance: 0)
-            .onChanged { _ in if !pressed { pressed = true; play.guiPress(item.inst, down: true) } }
+            .onChanged { _ in if !pressed { pressed = true; play.press(item.inst, true) } }
             .onEnded { g in
                 pressed = false
-                play.guiPress(item.inst, down: false)
-                if abs(g.translation.width) < 20 && abs(g.translation.height) < 20 { play.guiActivate(item.inst) }
+                play.press(item.inst, false)
+                if abs(g.translation.width) < 20 && abs(g.translation.height) < 20 { play.activate(item.inst) }
             }, including: isButton ? .all : .subviews)
         .gesture(DragGesture().onChanged { g in
-            play.guiScroll(item.inst, dx: Float(-g.velocity.width / 60), dy: Float(-g.velocity.height / 60))
+            play.scroll(item.inst, Float(-g.velocity.width / 60), Float(-g.velocity.height / 60))
         }, including: item.kind == .scroll ? .all : .subviews)
         .onAppear(perform: loadImage)
         .onChange(of: item.image) { _, _ in loadImage() }
@@ -138,5 +153,47 @@ enum ImageDecoder {
             AssetCache.shared.fetch(inner)
         }
         return nil
+    }
+}
+
+/// Plugin dock widgets shown as floating panels in the editor.
+struct PluginWidgetsView: View {
+    @ObservedObject var store: StudioStore
+    @State private var tick = 0
+    private let timer = Timer.publish(every: 0.2, on: .main, in: .common).autoconnect()
+
+    var body: some View {
+        let _ = tick
+        if let host = store.pluginHost {
+            VStack(alignment: .trailing, spacing: 10) {
+                ForEach(host.widgets(), id: \.self) { w in
+                    let size = Vector2(300, 360)
+                    VStack(spacing: 0) {
+                        HStack {
+                            Text(w.get("Title")?.asString ?? w.name).font(.caption.bold())
+                            Spacer()
+                            Button { w.set("Enabled", .bool(false)) } label: { Image(systemName: "xmark") }
+                        }
+                        .padding(6)
+                        .background(.bar)
+                        ZStack(alignment: .topLeading) {
+                            Color(.systemBackground)
+                            ForEach(Array(host.layout(widget: w, size: size).enumerated()), id: \.offset) { _, it in
+                                GuiItemView(item: it, play: GuiActions(activate: { host.guiActivate($0) },
+                                                                       text: { host.guiText($0, $1, enter: true) }))
+                                    .frame(width: CGFloat(max(0, it.w)), height: CGFloat(max(0, it.h)))
+                                    .position(x: CGFloat(it.x + it.w / 2), y: CGFloat(it.y + it.h / 2))
+                            }
+                        }
+                        .frame(width: CGFloat(size.x), height: CGFloat(size.y))
+                        .clipped()
+                    }
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                    .shadow(radius: 6)
+                }
+            }
+            .padding(10)
+            .onReceive(timer) { _ in tick &+= 1 }
+        }
     }
 }

@@ -244,7 +244,10 @@ public final class PlaySession: ScriptHost {
             ch.name = p.name
             ModelMath.pivotTo(ch, spawnLocation())
         } else {
-            ch = CharacterBuilder.buildR6(name: p.name, at: spawnLocation())
+            ch = wantR15 ? CharacterBuilder.buildR15(name: p.name, at: spawnLocation())
+                         : CharacterBuilder.buildR6(name: p.name, at: spawnLocation())
+            if !wantR15 { CharacterBuilder.addR6Attachments(ch) }
+            if let avatar { CharacterBuilder.apply(avatar, to: ch) }
         }
         if let scripts = dm.findService("StarterPlayer")?.findFirstChild("StarterCharacterScripts") {
             for s in scripts.children { s.cloneTree().attachRaw(ch) }
@@ -264,6 +267,20 @@ public final class PlaySession: ScriptHost {
         physics.dirty = true
         rt.fire(p, "CharacterAdded", [.object(.instance(ch))])
         rt.fire(p, "CharacterAppearanceLoaded", [.object(.instance(ch))])
+    }
+
+    /// The player's avatar (set by the app once it has loaded it; respawns to apply).
+    public var avatar: AvatarSpec? {
+        didSet { if running, character != nil, deadTimer == nil { spawnCharacter() } }
+    }
+
+    /// StarterPlayer.GameSettingsAvatar: 0 R6, 1 R15, 2 player's choice (PlaySession.wantR15).
+    private var wantR15: Bool {
+        switch dm.findService("StarterPlayer")?.get("GameSettingsAvatar")?.asEnum ?? 2 {
+        case 0: return false
+        case 1: return true
+        default: return avatar?.r15 ?? false
+        }
     }
 
     private var humanoid: Instance? { character?.findFirstChildOfClass("Humanoid") }
@@ -546,6 +563,20 @@ public final class PlaySession: ScriptHost {
                 m.set("Transform", .cframe(cf), notify: false)
                 animated = true
             }
+        }
+        if !animated, r15 {
+            func joint(_ part: String, _ angle: Float) {
+                ch.findFirstChild(part)?.children.first { $0.className == "Motor6D" }?.set("Transform", .cframe(CFrame.rx(angle)), notify: false)
+            }
+            var arm: Float = 0, leg: Float = 0
+            switch pose {
+            case "walk": arm = sin(animTime * 9) * 0.9; leg = arm
+            case "jump", "fall": arm = .pi * 0.9; leg = 0
+            case "sit": arm = 0.4; leg = .pi / 2
+            default: arm = sin(animTime * 1.5) * 0.05
+            }
+            joint("RightUpperArm", -arm); joint("LeftUpperArm", pose == "jump" || pose == "fall" ? -arm : arm)
+            joint("RightUpperLeg", pose == "sit" ? leg : leg); joint("LeftUpperLeg", pose == "sit" ? leg : -leg)
         }
         if !animated, !r15, let torso = ch.findFirstChild("Torso") {
             func setMotor(_ name: String, _ angle: Float) {

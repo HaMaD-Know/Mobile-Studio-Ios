@@ -39,6 +39,12 @@ struct SettingsView: View {
                     Text(account.apiKey == nil ? "Needed to save or publish places to Roblox. Create one at create.roblox.com → Open Cloud → API Keys with the universe-places write and asset read permissions."
                                                : "An API key is saved on this device (in the Keychain).")
                 }
+                Section("Play") {
+                    Toggle("Use My Roblox Avatar", isOn: Binding(
+                        get: { UserDefaults.standard.object(forKey: "useMyAvatar") as? Bool ?? true },
+                        set: { UserDefaults.standard.set($0, forKey: "useMyAvatar") }))
+                        .disabled(!account.isSignedIn)
+                }
                 Section("Editor") {
                     Toggle("Snap to Grid", isOn: $store.snapEnabled)
                     Picker("Move Snap", selection: $store.moveSnap) {

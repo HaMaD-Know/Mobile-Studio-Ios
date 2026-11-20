@@ -71,6 +71,37 @@ public enum GuiLayout {
             Gui.rects[ObjectIdentifier(b)] = rect
             children(b, rect, b.get("ClipsDescendants")?.asBool == true ? rect : nil, 0, &out, &order)
         }
+        // SurfaceGuis: laid out on their canvas, then scaled onto where the face appears on screen.
+        let surfaces = workspace.descendants().filter { $0.className == "SurfaceGui" } +
+            (playerGui?.descendants().filter { $0.className == "SurfaceGui" } ?? [])
+        for sg in surfaces where sg.get("Enabled")?.asBool != false {
+            guard let part = sg.get("Adornee")?.asInstance ?? sg.parent, part.isA("BasePart") else { continue }
+            let cf = PartData.cframe(part), size = PartData.size(part)
+            let face = Int(sg.get("Face")?.asEnum ?? 5)
+            let axis = face % 3, sign: Float = face < 3 ? 1 : -1
+            var offset = Vector3.zero; offset[axis] = sign * size[axis] / 2
+            let (fw, fh): (Float, Float) = axis == 0 ? (size.z, size.y) : (axis == 1 ? (size.x, size.z) : (size.x, size.y))
+            let centre = cf.pointToWorld(offset)
+            let (s0, on) = project(centre)
+            guard on, s0.z > 0 else { continue }
+            let pps = num(sg, "PixelsPerStud", 50)
+            let canvas = (x: Float(0), y: Float(0), w: fw * pps, h: fh * pps)
+            let pxPerStud = viewport.y / (2 * s0.z * tan(35 * .pi / 180))
+            let scale = pxPerStud / pps
+            guard scale > 0.02 else { continue }
+            var local: [GuiItem] = []
+            var localOrder = 0
+            children(sg, canvas, nil, 0, &local, &localOrder)
+            let ox = s0.x - canvas.w * scale / 2, oy = s0.y - canvas.h * scale / 2
+            let clip = (x: ox, y: oy, w: canvas.w * scale, h: canvas.h * scale)
+            for var it in local {
+                it.x = ox + it.x * scale; it.y = oy + it.y * scale; it.w *= scale; it.h *= scale
+                it.textSize *= scale; it.cornerRadius *= scale
+                it.clip = clip
+                it.order = order; order += 1
+                out.append(it)
+            }
+        }
         out.sort { ($0.zIndex, $0.order) < ($1.zIndex, $1.order) }
         return out
     }

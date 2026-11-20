@@ -14,6 +14,8 @@ struct Frame {
     float4 horizon;     // rgb
     float4 zenith;      // rgb
     float4 params;      // x ambient, y exposure, z time, w hasSurfaceTexture
+    float4x4 shadowVP;  // sun shadow map projection
+    float4 shadowOn;    // x: 1 when the shadow map is valid
 };
 
 struct PartInstance {
@@ -127,6 +129,7 @@ fragment float4 part_fs(VOut in [[stage_in]], bool front [[front_facing]],
                         texture2d<float> matTex [[texture(0)]],
                         texture2d<float> nrmTex [[texture(1)]],
                         texture2d<float> surfTex [[texture(2)]],
+                        depth2d<float> shadowMap [[texture(3)]],
                         sampler smp [[sampler(0)]]) {
     PartInstance p = insts[in.inst];
     float3 n = normalize(in.normal);
@@ -176,6 +179,27 @@ fragment float4 part_fs(VOut in [[stage_in]], bool front [[front_facing]],
         float diff = max(ndl, 0.0);
         float3 sky = mix(f.horizon.rgb, f.zenith.rgb, 0.5);
         float3 amb = f.params.x * mix(float3(0.82), mix(float3(1.0), sky * 1.2, 0.35), 0.5 + 0.5 * n.y);
+        float sh = 1.0;
+        if (f.shadowOn.x > 0.5 && ndl > 0.0) {
+            constexpr sampler cmp(coord::normalized, filter::linear, address::clamp_to_edge, compare_func::less_equal);
+            float4 sp = f.shadowVP * float4(in.world, 1.0);
+            float3 q = sp.xyz / sp.w;
+            float2 uv = float2(q.x * 0.5 + 0.5, 0.5 - q.y * 0.5);
+            if (uv.x > 0.001 && uv.x < 0.999 && uv.y > 0.001 && uv.y < 0.999 && q.z < 1.0) {
+                float bias = 0.0015 + 0.004 * (1.0 - ndl);
+                float2 t = float2(1.0 / 2048.0);
+                sh = 0.0;
+                for (int dx = -1; dx <= 1; dx++) {
+                    for (int dy = -1; dy <= 1; dy++) {
+                        sh += shadowMap.sample_compare(cmp, uv + float2(dx, dy) * t, q.z - bias);
+                    }
+                }
+                sh /= 9.0;
+                float2 e = min(uv, 1.0 - uv);
+                sh = mix(1.0, sh, clamp(min(e.x, e.y) * 12.0, 0.0, 1.0));
+            }
+        }
+        diff *= sh;
         col = c * (amb + f.sunColor.rgb * diff);
         float3 v = normalize(f.camPos.xyz - in.world);
         float3 h = normalize(light + v);
@@ -189,6 +213,13 @@ fragment float4 part_fs(VOut in [[stage_in]], bool front [[front_facing]],
     float fog = smoothstep(900.0, 5000.0, dist) * 0.7;
     col = mix(col, f.horizon.rgb, fog);
     return float4(col, p.color.a);
+}
+
+// MARK: shadow depth pass
+
+vertex float4 shadow_vs(VIn in [[stage_in]], constant Frame& f [[buffer(1)]],
+                        const device PartInstance* insts [[buffer(2)]], uint iid [[instance_id]]) {
+    return f.shadowVP * (insts[iid].model * float4(in.pos, 1.0));
 }
 
 // MARK: sky

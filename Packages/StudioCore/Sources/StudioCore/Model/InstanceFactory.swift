@@ -93,6 +93,7 @@ public enum InstanceFactory {
                 s(name + "Name", .string(name))
             }
         }
+        for (n, v) in ExtraDefaults.values(cls) where !i.props.contains(n) { s(n, v) }
         if ClassDb.isA(cls, "Constraint") {
             for (n, v) in [("Attachment0", PropValue.ref(nil)), ("Attachment1", .ref(nil)), ("Enabled", .bool(true)),
                            ("Color", .brickColor(BrickColorV(194)))] where !i.props.contains(n) { s(n, v) }
