@@ -62,11 +62,16 @@ public final class PluginHost {
 
     /// Toolbar buttons created by plugins.
     public func buttons() -> [Button] {
-        plugins.flatMap { $0.descendants() }.filter { $0.className == "PluginToolbarButton" }.map { b in
-            Button(id: ObjectIdentifier(b), inst: b, toolbar: b.parent?.name ?? "",
-                   text: b.get("Text")?.asString ?? b.name, tooltip: b.get("Tooltip")?.asString ?? "",
-                   active: b.get("Active")?.asBool == true)
+        var out: [Button] = []
+        for p in plugins {
+            for b in p.descendants() where b.className == "PluginToolbarButton" {
+                let text: String = b.get("Text")?.asString ?? b.name
+                let tip: String = b.get("Tooltip")?.asString ?? ""
+                let active: Bool = b.get("Active")?.asBool == true
+                out.append(Button(id: ObjectIdentifier(b), inst: b, toolbar: b.parent?.name ?? "", text: text, tooltip: tip, active: active))
+            }
         }
+        return out
     }
 
     public func click(_ b: Instance) { rt.fire(b, "Click") }
