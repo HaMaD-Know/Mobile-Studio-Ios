@@ -1,6 +1,7 @@
 import SwiftUI
 import UniformTypeIdentifiers
 import StudioCore
+import StudioScript
 
 extension UTType {
     static let rbxl = UTType(importedAs: "com.exampletest.mobilestudio.rbxl", conformingTo: .data)
@@ -42,7 +43,7 @@ struct EditorView: View {
             if hSize == .regular {
                 HStack(spacing: 0) {
                     viewport
-                    if showPanel {
+                    if showPanel && store.play == nil {
                         Divider()
                         VStack(spacing: 0) {
                             ExplorerView(store: store).frame(maxHeight: .infinity)
@@ -54,7 +55,7 @@ struct EditorView: View {
                 }
             } else {
                 viewport
-                    .sheet(isPresented: $showPanel) {
+                    .sheet(isPresented: Binding(get: { showPanel && store.play == nil }, set: { showPanel = $0 || store.play != nil })) {
                         compactPanel
                             .presentationDetents([.fraction(0.12), .medium, .large], selection: $detent)
                             .presentationBackgroundInteraction(.enabled(upThrough: .medium))
@@ -89,13 +90,20 @@ struct EditorView: View {
         .animation(.default, value: store.toast)
     }
 
-    private var viewport: some View {
-        ViewportView(store: store, multiSelect: multiSelect)
-            .ignoresSafeArea(edges: .bottom)
-            .overlay(alignment: .topLeading) { toolPicker.padding(10) }
-            .overlay(alignment: .bottomLeading) {
-                if showFly { FlyPad(store: store).padding(.leading, 12).padding(.bottom, hSize == .regular ? 16 : 110) }
-            }
+    @ViewBuilder private var viewport: some View {
+        if let play = store.play {
+            ViewportView(store: store, multiSelect: false)
+                .ignoresSafeArea()
+                .overlay { PlayGuiView(store: store, play: play) }
+                .overlay { PlayHUD(store: store, play: play) }
+        } else {
+            ViewportView(store: store, multiSelect: multiSelect)
+                .ignoresSafeArea(edges: .bottom)
+                .overlay(alignment: .topLeading) { toolPicker.padding(10) }
+                .overlay(alignment: .bottomLeading) {
+                    if showFly { FlyPad(store: store).padding(.leading, 12).padding(.bottom, hSize == .regular ? 16 : 110) }
+                }
+        }
     }
 
     private var toolPicker: some View {
@@ -154,6 +162,10 @@ struct EditorView: View {
                 .disabled(!store.session.undo.canRedo)
         }
         ToolbarItemGroup(placement: .topBarTrailing) {
+            Button { store.play == nil ? store.startPlay() : store.stopPlay() } label: {
+                Image(systemName: store.play == nil ? "play.fill" : "stop.fill").foregroundStyle(store.play == nil ? .green : .red)
+            }
+            .accessibilityLabel(store.play == nil ? "Play" : "Stop")
             Menu {
                 Button("Block", systemImage: "cube") { store.insertPart(shape: 1) }
                 Button("Sphere", systemImage: "circle") { store.insertPart(shape: 0) }

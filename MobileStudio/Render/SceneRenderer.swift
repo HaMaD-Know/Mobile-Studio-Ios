@@ -156,13 +156,13 @@ final class SceneRenderer: NSObject, MTKViewDelegate {
         store.tick()
 
         let w = Float(view.drawableSize.width), h = Float(view.drawableSize.height)
-        let cam = store.camera
-        let proj = cam.projection(aspect: w / max(h, 1))
-        let vp = proj * cam.viewMatrix()
+        let (camCF, fov) = store.renderCamera()
+        let proj = simd_float4x4.perspective(fovY: fov * .pi / 180, aspect: w / max(h, 1), near: 0.1, far: 20000)
+        let vp = proj * camCF.inverse.matrix()
         let lighting = store.lightingInfo()
         let frame = FrameUniforms(
             viewProj: vp, invViewProj: vp.inverse,
-            camPos: SIMD4(cam.pos.simd, 1),
+            camPos: SIMD4(camCF.position.simd, 1),
             lightDir: SIMD4(lighting.sunDir, 0),
             sunColor: SIMD4(lighting.sunColor, 0),
             horizon: SIMD4(0.78, 0.86, 0.96, 1), zenith: SIMD4(0.36, 0.58, 0.92, 1),

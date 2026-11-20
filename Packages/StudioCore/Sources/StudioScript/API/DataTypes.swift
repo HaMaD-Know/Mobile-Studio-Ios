@@ -4,6 +4,8 @@ import StudioCore
 
 // MARK: math helpers missing from the model types
 
+@inline(__always) func sgn(_ x: Float) -> Float { x > 0 ? 1 : (x < 0 ? -1 : 0) }
+
 extension Vector2 {
     func lerp(_ o: Vector2, _ t: Float) -> Vector2 { Vector2(x + (o.x - x) * t, y + (o.y - y) * t) }
     func dot(_ o: Vector2) -> Float { x * o.x + y * o.y }
@@ -544,7 +546,7 @@ enum DataTypes {
             case "Abs": c.push(v.abs)
             case "Floor": c.push(Vector3(floor(v.x), floor(v.y), floor(v.z)))
             case "Ceil": c.push(Vector3(ceil(v.x), ceil(v.y), ceil(v.z)))
-            case "Sign": c.push(Vector3(sign(v.x), sign(v.y), sign(v.z)))
+            case "Sign": c.push(Vector3(sgn(v.x), sgn(v.y), sgn(v.z)))
             case "Angle":
                 let o2 = try c.checkVector3(2, m)
                 let d = v.unit.dot(o2.unit)
@@ -564,7 +566,7 @@ enum DataTypes {
             case "Abs": c.push(.vector2(Vector2(abs(v.x), abs(v.y))))
             case "Floor": c.push(.vector2(Vector2(floor(v.x), floor(v.y))))
             case "Ceil": c.push(.vector2(Vector2(ceil(v.x), ceil(v.y))))
-            case "Sign": c.push(.vector2(Vector2(sign(v.x), sign(v.y))))
+            case "Sign": c.push(.vector2(Vector2(sgn(v.x), sgn(v.y))))
             case "Angle":
                 guard let o2 = c.vector2(2) else { throw c.argError(2, "Vector2", m) }
                 c.push(atan2(v.x * o2.y - v.y * o2.x, v.dot(o2)))

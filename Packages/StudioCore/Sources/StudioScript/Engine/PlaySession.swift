@@ -620,6 +620,46 @@ public final class PlaySession: ScriptHost {
         }
     }
 
+    // MARK: GUI (ui/GuiOverlay.kt input handling)
+
+    public func layoutGui() -> [GuiItem] {
+        GuiLayout.layout(playerGui: player?.findFirstChild("PlayerGui"), workspace: dm.workspace, viewport: viewport) { [unowned self] p in
+            self.worldToViewport(p)
+        }
+    }
+
+    public func guiPress(_ g: Instance, down: Bool) {
+        let input: ScriptValue = .table([
+            (.string("UserInputType"), .object(.enumItem(ScriptEnums.item("UserInputType", "Touch")!))),
+            (.string("UserInputState"), .object(.enumItem(ScriptEnums.item("UserInputState", down ? "Begin" : "End")!))),
+        ])
+        rt.fire(g, down ? "MouseButton1Down" : "MouseButton1Up", [.number(0), .number(0)])
+        rt.fire(g, down ? "InputBegan" : "InputEnded", [input])
+    }
+
+    public func guiActivate(_ g: Instance) {
+        rt.fire(g, "MouseButton1Click")
+        rt.fire(g, "Activated", [.table([]), .number(1)])
+    }
+
+    public func guiText(_ g: Instance, _ text: String, enter: Bool) {
+        g.set("Text", .string(text))
+        if enter { rt.fire(g, "FocusLost", [.bool(true), .nil_]) }
+    }
+
+    public func guiFocus(_ g: Instance) { rt.fire(g, "Focused") }
+
+    public func guiScroll(_ g: Instance, dx: Float, dy: Float) {
+        var cp = Vector2.zero
+        if case .vector2(let v)? = g.get("CanvasPosition") { cp = v }
+        let r = Gui.abs(g)
+        let canvas: UDim2 = { if case .udim2(let u)? = g.get("CanvasSize") { return u }; return UDim2(0, 0, 2, 0) }()
+        let maxY = max(0, canvas.y.scale * r.h + Float(canvas.y.offset) - r.h)
+        let maxX = max(0, canvas.x.scale * r.w + Float(canvas.x.offset) - r.w)
+        cp = Vector2(max(0, min(maxX, cp.x + dx)), max(0, min(maxY, cp.y + dy)))
+        g.set("CanvasPosition", .vector2(cp))
+    }
+
     // MARK: tools & chat
 
     public func backpackTools() -> [Instance] {

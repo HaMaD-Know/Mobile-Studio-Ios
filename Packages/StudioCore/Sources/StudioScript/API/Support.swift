@@ -232,6 +232,7 @@ enum Gui {
     static var viewport = Vector2(1280, 720)
 
     static func abs(_ g: Instance) -> (x: Float, y: Float, w: Float, h: Float) {
+        if let r = rects[ObjectIdentifier(g)] { return r }
         guard g.isA("GuiObject"), let parent = g.parent else { return (0, 0, viewport.x, viewport.y) }
         let p = abs(parent)
         let size = g.get("Size").flatMap { if case .udim2(let u) = $0 { return u }; return nil } ?? UDim2(0, 100, 0, 100)

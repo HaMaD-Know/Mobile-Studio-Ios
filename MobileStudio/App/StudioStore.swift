@@ -1,6 +1,7 @@
 import SwiftUI
 import simd
 import StudioCore
+import StudioScript
 
 /// App-wide editor state (the iOS counterpart of core/Studio.kt): owns the EditSession,
 /// camera, active tool and file info, and adapts tree events to SwiftUI.
@@ -37,6 +38,12 @@ final class StudioStore: ObservableObject, TreeListener {
     @Published var snapEnabled = true
     @Published var selectInsideModels = false
     @Published var output: [String] = []
+    /// Running Play session (nil while editing).
+    @Published var play: PlaySession?
+    /// Bumped every few frames while playing so the HUD refreshes.
+    @Published var hudTick = 0
+    private var hudCounter = 0
+    let audio = AudioEngine()
     /// On-screen fly controls: x strafe, y up/down, z forward.
     var flyInput = SIMD3<Float>(0, 0, 0)
     var flySpeed: Float = 40
@@ -174,23 +181,68 @@ final class StudioStore: ObservableObject, TreeListener {
         let now = CACurrentMediaTime()
         let dt = Float(min(now - lastTick, 0.1))
         lastTick = now
+        if let play {
+            play.viewport = Vector2(Float(viewSize.width), Float(viewSize.height))
+            play.step(dt)
+            hudCounter += 1
+            if hudCounter % 6 == 0 { hudTick &+= 1 }
+            return
+        }
         if flyInput != .zero {
             let v = camera.right * flyInput.x + Vector3(0, 1, 0) * flyInput.y + camera.forward * flyInput.z
             camera.pos += v * (flySpeed * dt)
         }
     }
 
+    /// Model currently shown: the Play copy while playing, else the edit model.
+    var shownModel: DataModel { play?.dm ?? model }
+
     func renderParts() -> [Instance] {
         if partsCacheStamp != Instance.changeCount {
             partsCacheStamp = Instance.changeCount
-            partsCache = model.workspace.descendants().filter { $0.isA("BasePart") && $0.className != "Terrain" }
+            partsCache = shownModel.workspace.descendants().filter { $0.isA("BasePart") && $0.className != "Terrain" }
         }
         return partsCache
     }
 
+    func renderCamera() -> (CFrame, Float) {
+        if let play { return (play.cameraCFrame, play.fieldOfView) }
+        return (camera.cframe(), camera.fov)
+    }
+
+    // MARK: Play mode
+
+    func startPlay() {
+        guard play == nil else { return }
+        let session = PlaySession(editModel: model)
+        session.viewport = Vector2(Float(viewSize.width), Float(viewSize.height))
+        session.onOutput = { [weak self] level, line in
+            switch level {
+            case .info: self?.log(line)
+            case .warn: self?.log("⚠︎ " + line)
+            case .error: self?.log("⛔︎ " + line)
+            }
+        }
+        session.onSound = { [weak self] sound, on in self?.audio.set(sound, playing: on) }
+        play = session
+        partsCacheStamp = -1
+        session.start()
+        log("▶︎ Play started")
+    }
+
+    func stopPlay() {
+        guard let p = play else { return }
+        p.stop()
+        audio.stopAll()
+        play = nil
+        partsCacheStamp = -1
+        Instance.changeCount += 1
+        log("■ Play stopped")
+    }
+
     struct Lighting { var sunDir: SIMD3<Float>; var sunColor: SIMD3<Float>; var ambient: Float }
     func lightingInfo() -> Lighting {
-        let l = model.findService("Lighting")
+        let l = shownModel.findService("Lighting")
         let clock = l?.get("ClockTime")?.asFloat ?? 14
         let bright = l?.get("Brightness")?.asFloat ?? 2
         let a = (clock - 6) / 12 * .pi
@@ -421,6 +473,7 @@ final class StudioStore: ObservableObject, TreeListener {
     // MARK: overlays for the renderer
 
     func overlays() -> [SceneRenderer.Overlay] {
+        if play != nil { return [] }
         var out: [SceneRenderer.Overlay] = []
         let parts = session.selectedParts()
         let blue = SIMD4<Float>(0.05, 0.62, 1, 1)

@@ -1,6 +1,7 @@
 import SwiftUI
 import MetalKit
 import StudioCore
+import StudioScript
 
 /// The 3D viewport (port of ui/ViewportView.kt's edit-mode input):
 /// tap = select, drag on a handle = move/scale/rotate, 1-finger drag = look around,
@@ -61,6 +62,7 @@ struct ViewportView: UIViewRepresentable {
             syncSize()
             let p = g.location(in: view)
             MainActor.assumeIsolated {
+                if let play = store.play { play.tap(x: Float(p.x), y: Float(p.y)); return }
                 if store.handle(at: p) != nil { return }
                 store.tap(at: p, additive: multiSelect)
             }
@@ -69,6 +71,7 @@ struct ViewportView: UIViewRepresentable {
         @objc func doubleTap(_ g: UITapGestureRecognizer) {
             syncSize()
             MainActor.assumeIsolated {
+                if store.play != nil { return }
                 store.tap(at: g.location(in: view), additive: false)
                 store.focusSelection()
             }
@@ -78,6 +81,12 @@ struct ViewportView: UIViewRepresentable {
             syncSize()
             let p = g.location(in: view)
             MainActor.assumeIsolated {
+                if let play = store.play {
+                    let t = g.translation(in: view)
+                    play.cameraDrag(dx: Float(t.x), dy: Float(t.y))
+                    g.setTranslation(.zero, in: view)
+                    return
+                }
                 switch g.state {
                 case .began:
                     // Start where the finger first touched, not where the pan was recognised.
@@ -107,6 +116,7 @@ struct ViewportView: UIViewRepresentable {
             let t = g.translation(in: view)
             g.setTranslation(.zero, in: view)
             MainActor.assumeIsolated {
+                if let play = store.play { play.cameraDrag(dx: Float(t.x), dy: Float(t.y)); return }
                 let cam = store.camera
                 let speed = max(0.05, cam.pos.y.magnitude * 0.004 + 0.05)
                 cam.pos += cam.right * (-Float(t.x) * speed) + cam.up * (Float(t.y) * speed)
@@ -118,6 +128,7 @@ struct ViewportView: UIViewRepresentable {
             let d = g.scale - lastPinch
             lastPinch = g.scale
             MainActor.assumeIsolated {
+                if let play = store.play { play.cameraZoom(Float(1 + d)); return }
                 let cam = store.camera
                 cam.pos += cam.forward * (Float(d) * 60)
             }

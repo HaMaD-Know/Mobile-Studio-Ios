@@ -267,7 +267,8 @@ enum HumanoidAPI {
                                            .object(.enumItem(ScriptEnums.item("HumanoidStateType", value: s) ?? ScriptEnums.item("HumanoidStateType", value: 8)!))])
             return 0
         case ("Humanoid", "GetState"):
-            let s = Int(inst.get("__State").flatMap { if case .int(let x) = $0 { return x }; return nil } ?? 8)
+            let stored: Int32? = inst.get("__State").flatMap { v -> Int32? in if case .int(let x) = v { return x }; return nil }
+            let s = Int(stored ?? 8)
             c.push(.enumItem(ScriptEnums.item("HumanoidStateType", value: s) ?? ScriptEnums.item("HumanoidStateType", value: 8)!)); return 1
         case ("Humanoid", "SetStateEnabled"):
             let s = c.enumItem(2)?.name ?? ""

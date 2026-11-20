@@ -26,6 +26,9 @@ targets:
         buildPhase: resources
     dependencies:
       - package: StudioCore
+        product: StudioCore
+      - package: StudioCore
+        product: StudioScript
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.exampletest.mobilestudio
