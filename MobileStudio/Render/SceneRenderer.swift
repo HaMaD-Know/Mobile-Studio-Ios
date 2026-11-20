@@ -26,6 +26,7 @@ final class SceneRenderer: NSObject, MTKViewDelegate {
         var extra: SIMD4<Float>
     }
     struct OverlayInstance { var model: simd_float4x4; var color: SIMD4<Float> }
+    struct DecalInstance { var model: simd_float4x4; var tint: SIMD4<Float>; var uv: SIMD4<Float>; var normal: SIMD4<Float> }
 
     enum ShapeKind: Int, CaseIterable { case box, wedge, cornerWedge, cylinder, ball }
     enum OverlayMesh { case boxEdges, cube, cone, cylinderY, torus, sphere }
@@ -44,6 +45,8 @@ final class SceneRenderer: NSObject, MTKViewDelegate {
     private var partBlendPipeline: MTLRenderPipelineState!
     private var skyPipeline: MTLRenderPipelineState!
     private var overlayPipeline: MTLRenderPipelineState!
+    private var decalPipeline: MTLRenderPipelineState!
+    private var quadMesh: GPUMesh!
     private var depthWrite: MTLDepthStencilState!
     private var depthReadOnly: MTLDepthStencilState!
     private var depthNone: MTLDepthStencilState!
@@ -98,6 +101,8 @@ final class SceneRenderer: NSObject, MTKViewDelegate {
         partBlendPipeline = try pipe("part_vs", "part_fs", blend: true, vertexDesc: vd)
         skyPipeline = try pipe("sky_vs", "sky_fs", blend: false, vertexDesc: nil)
         overlayPipeline = try pipe("overlay_vs", "overlay_fs", blend: true, vertexDesc: vd)
+        decalPipeline = try pipe("decal_vs", "decal_fs", blend: true, vertexDesc: vd)
+        quadMesh = MeshFactory.quad(device)
 
         func depth(_ write: Bool, _ test: Bool) -> MTLDepthStencilState {
             let d = MTLDepthStencilDescriptor()
@@ -228,13 +233,37 @@ final class SceneRenderer: NSObject, MTKViewDelegate {
                 opaque[meshKey, default: Group(mesh: mesh, color: colorTex, normal: normalTex, items: [])].items.append(inst)
             }
         }
+        // Decals / Textures: one quad per face, grouped by image.
+        var decals: [String: (MTLTexture, [DecalInstance])] = [:]
+        for p in store.renderParts() where !p.children.isEmpty {
+            let cf = PartData.cframe(p), size = PartData.size(p)
+            for d in p.children where d.className == "Decal" || d.className == "Texture" {
+                let img = (d.get("Texture") ?? d.get("ColorMapContent"))?.description ?? ""
+                guard !img.isEmpty, let tex = textureCache.texture(for: img, device: device) else { continue }
+                let face = Int(d.get("Face")?.asEnum ?? 5)
+                let (local, w, h) = SceneRenderer.faceFrame(face, size)
+                var uv = SIMD4<Float>(1, 1, 0, 0)
+                if d.className == "Texture" {
+                    let su = d.get("StudsPerTileU")?.asFloat ?? 2, sv = d.get("StudsPerTileV")?.asFloat ?? 2
+                    uv = SIMD4(w / max(su, 0.01), h / max(sv, 0.01), (d.get("OffsetStudsU")?.asFloat ?? 0) / max(su, 0.01), (d.get("OffsetStudsV")?.asFloat ?? 0) / max(sv, 0.01))
+                }
+                let col = d.get("Color3")?.asColor3 ?? Color3(1, 1, 1)
+                let alpha = (1 - (d.get("Transparency")?.asFloat ?? 0)) * (1 - PartData.transparency(p))
+                let world = cf * local
+                decals[img, default: (tex, [])].1.append(DecalInstance(
+                    model: world.matrix(scale: Vector3(w, h, 1)), tint: SIMD4(col.r, col.g, col.b, alpha), uv: uv,
+                    normal: SIMD4(world.backVector.simd, 0)))
+            }
+        }
         let overlays = store.overlays()
 
         let partStride = MemoryLayout<PartInstance>.stride, ovStride = MemoryLayout<OverlayInstance>.stride
         let partCount = opaque.values.reduce(0) { $0 + $1.items.count } + transparent.values.reduce(0) { $0 + $1.items.count }
         // Every put() is 256-byte aligned, so budget one alignment pad per upload.
-        let uploads = 1 + opaque.count + transparent.count + overlays.count
-        let total = MemoryLayout<FrameUniforms>.stride + partCount * partStride + overlays.count * ovStride + uploads * 256
+        let decalCount = decals.values.reduce(0) { $0 + $1.1.count }
+        let uploads = 1 + opaque.count + transparent.count + overlays.count + decals.count
+        let total = MemoryLayout<FrameUniforms>.stride + partCount * partStride + overlays.count * ovStride
+            + decalCount * MemoryLayout<DecalInstance>.stride + uploads * 256
         let buf = buffer(total)
         var offset = 0
         func put<T>(_ arr: [T]) -> Int {
@@ -276,6 +305,16 @@ final class SceneRenderer: NSObject, MTKViewDelegate {
         enc.setRenderPipelineState(partPipeline)
         enc.setDepthStencilState(depthWrite)
         drawGroups(opaque)
+        // Decals sit 0.01 studs above the face, drawn after opaque geometry.
+        enc.setRenderPipelineState(decalPipeline)
+        enc.setDepthStencilState(depthReadOnly)
+        for (_, (tex, items)) in decals {
+            let o = put(items)
+            enc.setVertexBuffer(quadMesh.buffer, offset: 0, index: 0)
+            enc.setVertexBuffer(buf, offset: o, index: 2)
+            enc.setFragmentTexture(tex, index: 0)
+            enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 6, instanceCount: items.count)
+        }
         enc.setRenderPipelineState(partBlendPipeline)
         enc.setDepthStencilState(depthReadOnly)
         drawGroups(transparent)
@@ -299,6 +338,19 @@ final class SceneRenderer: NSObject, MTKViewDelegate {
     }
 
     private func surf(_ p: Instance, _ name: String) -> Float { Float(p.get(name)?.asEnum ?? 0) }
+
+    /// Local frame of a part face (quad +Z = outward normal) and its width/height in studs.
+    static func faceFrame(_ face: Int, _ s: Vector3) -> (CFrame, Float, Float) {
+        let e: Float = 0.01
+        switch face {
+        case 0: return (CFrame.at(Vector3(s.x / 2 + e, 0, 0)) * .ry(.pi / 2), s.z, s.y)      // Right
+        case 1: return (CFrame.at(Vector3(0, s.y / 2 + e, 0)) * .rx(-.pi / 2), s.x, s.z)     // Top
+        case 2: return (CFrame.at(Vector3(0, 0, s.z / 2 + e)), s.x, s.y)                     // Back
+        case 3: return (CFrame.at(Vector3(-s.x / 2 - e, 0, 0)) * .ry(-.pi / 2), s.z, s.y)    // Left
+        case 4: return (CFrame.at(Vector3(0, -s.y / 2 - e, 0)) * .rx(.pi / 2), s.x, s.z)     // Bottom
+        default: return (CFrame.at(Vector3(0, 0, -s.z / 2 - e)) * .ry(.pi), s.x, s.y)       // Front
+        }
+    }
 }
 
 /// Loads Roblox material textures bundled from the Android app's assets/materials folder

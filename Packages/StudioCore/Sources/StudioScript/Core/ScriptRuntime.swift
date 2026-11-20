@@ -840,3 +840,17 @@ public protocol ScriptHost: AnyObject {
     func setActionTitle(_ name: String, _ title: String)
     func chat(_ player: Instance?, _ text: String)
 }
+
+/// Compile-only syntax check for the script editor (ScriptEditor.checkSyntax).
+public enum ScriptSyntax {
+    /// nil when the source compiles, else "line: message".
+    public static func check(_ source: String) -> String? {
+        var size = 0
+        guard let bc = source.withCString({ luau_swift_compile($0, source.utf8.count, &size) }) else { return "compile failed" }
+        defer { free(bc) }
+        // Luau encodes compile errors as bytecode version 0 followed by the message.
+        guard size > 0, bc[0] == 0 else { return nil }
+        let msg = String(decoding: UnsafeRawBufferPointer(start: bc + 1, count: size - 1), as: UTF8.self)
+        return msg.hasPrefix(":") ? String(msg.dropFirst()) : msg
+    }
+}

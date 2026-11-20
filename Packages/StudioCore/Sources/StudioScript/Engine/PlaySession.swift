@@ -43,6 +43,14 @@ public final class PlaySession: ScriptHost {
     public private(set) var chatLines: [(String, String)] = []
     public private(set) var actions: [String: (title: String, fn: LuaRef)] = [:]
     public var onSound: (Instance, Bool) -> Void = { _, _ in }
+    let animLib = AnimLibrary()
+    let animPlayer = AnimPlayer()
+    private var defaultPose = ""
+    /// Asset loader (content id -> bytes) the app provides for animations.
+    public var assetLoader: ((String, @escaping (Data?) -> Void) -> Void)? {
+        get { animLib.loader }
+        set { animLib.loader = newValue }
+    }
     public var onOutput: (OutputLevel, String) -> Void = { _, s in print(s) }
 
     public init(editModel: DataModel) {
@@ -499,45 +507,76 @@ public final class PlaySession: ScriptHost {
 
     public var isFirstPerson: Bool { camDistance < 1 }
 
-    // MARK: animation (procedural R6, PlaySession.animateR6)
+    // MARK: animation (PlaySession.animate: default Animate clips, script tracks, procedural fallback)
 
     private func animate(_ dt: Float) {
-        guard let ch = character, let torso = ch.findFirstChild("Torso") else { return }
+        guard let ch = character else { return }
         let speed = Vector3(charVelocity.x, 0, charVelocity.z).magnitude
         let hum = humanoid
         let pose: String = (hum?.get("Health_XML")?.asFloat ?? 100) <= 0 ? "dead" : seat != nil ? "sit" : !grounded ? (charVelocity.y > 0 ? "jump" : "fall") : speed > 0.5 ? "walk" : "idle"
         animTime += dt * (pose == "walk" ? max(1, speed / 16) : 1)
-        func setMotor(_ name: String, _ angle: Float) {
-            guard let m = torso.findFirstChild(name) else { return }
-            m.set("Transform", .cframe(CFrame.rz(angle)), notify: false)
-            m.set("DesiredAngle", .float(angle), notify: false)
+        let r15 = ch.findFirstChild("UpperTorso") != nil
+
+        // Default animations: switch clip when the pose changes.
+        if pose != defaultPose {
+            animPlayer.stopTag("default", fade: 0.2)
+            defaultPose = pose
         }
-        // Script-driven tracks own the rig while playing.
-        if tracks.contains(where: { $0.isPlaying && $0.owner.isDescendant(of: ch) || $0.owner === hum }) && pose == "idle" { return }
-        switch pose {
-        case "walk":
-            let a = sin(animTime * 9) * 1.0
-            setMotor("Right Shoulder", a); setMotor("Left Shoulder", a)
-            setMotor("Right Hip", -a); setMotor("Left Hip", -a)
-        case "jump", "fall":
-            setMotor("Right Shoulder", .pi); setMotor("Left Shoulder", -.pi)
-            setMotor("Right Hip", 0); setMotor("Left Hip", 0)
-        case "sit":
-            setMotor("Right Shoulder", .pi / 2); setMotor("Left Shoulder", -.pi / 2)
-            setMotor("Right Hip", .pi / 2); setMotor("Left Hip", -.pi / 2)
-        default:
-            let b = sin(animTime * 1.5) * 0.05
-            setMotor("Right Shoulder", b); setMotor("Left Shoulder", -b)
-            setMotor("Right Hip", 0); setMotor("Left Hip", 0)
+        if !animPlayer.isPlaying("default"), pose != "dead",
+           let ids = (r15 ? DefaultAnimations.r15 : DefaultAnimations.r6)[pose], let id = ids.first,
+           let clip = animLib.clip("rbxassetid://\(id)") {
+            let t = animPlayer.play(clip, tag: "default", fade: 0.2, speed: pose == "walk" ? max(0.5, speed / 16) : 1, priority: 0)
+            t.looped = pose != "jump"
         }
-        physics.solveJoints(only: ch)
-        // Animation tracks: advance time and fire Stopped/DidLoop.
-        for t in tracks where t.isPlaying {
-            t.timePosition += dt * t.speed
-            if t.length > 0 && t.timePosition >= t.length {
-                if t.looped { t.timePosition = 0; rt.fire(t, "DidLoop") } else { t.isPlaying = false; rt.fire(t, "Stopped"); rt.fire(t, "Ended") }
+
+        // Script tracks waiting for their clip to download.
+        for t in tracks where t.isPlaying && t.payload == nil {
+            if let id = t.animation.get("AnimationId")?.description, let clip = animLib.clip(id) { attach(t, clip) }
+        }
+        for done in animPlayer.step(dt) {
+            if let ref = done.ref, ref.isPlaying { ref.isPlaying = false; rt.fire(ref, "Stopped"); rt.fire(ref, "Ended") }
+        }
+        for t in tracks where t.isPlaying { if let tr = t.payload as? AnimPlayer.Track { t.timePosition = tr.time } }
+
+        // Apply to every Motor6D: animation first, procedural motion as a fallback for R6.
+        var animated = false
+        for m in ch.descendants() where m.className == "Motor6D" {
+            guard let p1 = m.get("Part1")?.asInstance else { continue }
+            if let cf = animPlayer.transform(p1.name) {
+                m.set("Transform", .cframe(cf), notify: false)
+                animated = true
             }
         }
+        if !animated, !r15, let torso = ch.findFirstChild("Torso") {
+            func setMotor(_ name: String, _ angle: Float) {
+                torso.findFirstChild(name)?.set("Transform", .cframe(CFrame.rz(angle)), notify: false)
+            }
+            switch pose {
+            case "walk":
+                let a = sin(animTime * 9) * 1.0
+                setMotor("Right Shoulder", a); setMotor("Left Shoulder", a)
+                setMotor("Right Hip", -a); setMotor("Left Hip", -a)
+            case "jump", "fall":
+                setMotor("Right Shoulder", .pi); setMotor("Left Shoulder", -.pi)
+                setMotor("Right Hip", 0); setMotor("Left Hip", 0)
+            case "sit":
+                setMotor("Right Shoulder", .pi / 2); setMotor("Left Shoulder", -.pi / 2)
+                setMotor("Right Hip", .pi / 2); setMotor("Left Hip", -.pi / 2)
+            default:
+                let b = sin(animTime * 1.5) * 0.05
+                setMotor("Right Shoulder", b); setMotor("Left Shoulder", -b)
+                setMotor("Right Hip", 0); setMotor("Left Hip", 0)
+            }
+        }
+        physics.solveJoints(only: ch)
+    }
+
+    private func attach(_ t: AnimTrackRef, _ clip: AnimClip) {
+        let tr = animPlayer.play(clip, tag: "script", fade: 0.1, weight: t.weight, speed: t.speed, priority: max(t.priority, 1))
+        tr.looped = t.looped || clip.looped
+        tr.ref = t
+        t.payload = tr
+        t.length = clip.length
     }
 
     // MARK: prompts & clicks
@@ -781,24 +820,34 @@ public final class PlaySession: ScriptHost {
 
     public func loadTrack(owner: Instance, animation: Instance) -> AnimTrackRef? {
         let t = AnimTrackRef(owner: owner, animation: animation)
-        t.length = 1
+        if let id = animation.get("AnimationId")?.description, let clip = animLib.clip(id) {
+            t.length = clip.length; t.looped = clip.looped; t.priority = clip.priority
+        }
+        tracks.removeAll { !$0.isPlaying && $0.payload == nil && $0.owner.parent == nil }
         tracks.append(t)
         return t
     }
     public func playTrack(_ t: AnimTrackRef, fade: Float, weight: Float, speed: Float) {
+        if let old = t.payload as? AnimPlayer.Track { animPlayer.stop(old, fade: fade) }
+        t.payload = nil
         t.isPlaying = true; t.weight = weight; t.speed = speed; t.timePosition = 0
-        if let anim = t.owner.findFirstChildOfClass("Animator") ?? Optional(t.owner) { rt.fire(anim, "AnimationPlayed", [.object(.track(t))]) }
+        if let id = t.animation.get("AnimationId")?.description, let clip = animLib.clip(id) { attach(t, clip) }
+        let animator = t.owner.findFirstChildOfClass("Animator") ?? t.owner
+        rt.fire(animator, "AnimationPlayed", [.object(.track(t))])
     }
     public func stopTrack(_ t: AnimTrackRef, fade: Float) {
         guard t.isPlaying else { return }
         t.isPlaying = false
+        if let tr = t.payload as? AnimPlayer.Track { animPlayer.stop(tr, fade: fade) }
+        t.payload = nil
         rt.fire(t, "Stopped")
     }
     public func adjustTrack(_ t: AnimTrackRef, speed: Float?, weight: Float?, looped: Bool?, time: Float?) {
-        if let speed { t.speed = speed }
-        if let weight { t.weight = weight }
-        if let looped { t.looped = looped }
-        if let time { t.timePosition = time }
+        let tr = t.payload as? AnimPlayer.Track
+        if let speed { t.speed = speed; tr?.speed = speed }
+        if let weight { t.weight = weight; tr?.targetWeight = weight; tr?.fadeRate = 10 }
+        if let looped { t.looped = looped; tr?.looped = looped }
+        if let time { t.timePosition = time; tr?.time = time }
     }
     public func playingTracks(_ owner: Instance) -> [AnimTrackRef] { tracks.filter { $0.isPlaying && $0.owner === owner } }
     public func playSound(_ sound: Instance) { onSound(sound, true) }

@@ -227,33 +227,3 @@ struct Vector3Editor: View {
         }
     }
 }
-
-/// Minimal script editor (the Android app's ScriptEditor has highlighting + autocomplete; phase 2).
-struct ScriptEditorView: View {
-    @ObservedObject var store: StudioStore
-    let script: Instance
-    @State private var text = ""
-    @Environment(\.dismiss) private var dismiss
-
-    var body: some View {
-        NavigationStack {
-            TextEditor(text: $text)
-                .font(.system(.footnote, design: .monospaced))
-                .autocorrectionDisabled()
-                .textInputAutocapitalization(.never)
-                .padding(.horizontal, 6)
-                .navigationTitle(script.name)
-                .navigationBarTitleDisplayMode(.inline)
-                .toolbar {
-                    ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
-                    ToolbarItem(placement: .confirmationAction) {
-                        Button("Done") {
-                            store.setProp(script, "Source", .string(text))
-                            dismiss()
-                        }
-                    }
-                }
-                .onAppear { text = script.get("Source")?.description ?? "" }
-        }
-    }
-}

@@ -243,3 +243,28 @@ vertex OOut overlay_vs(VIn in [[stage_in]], constant Frame& f [[buffer(1)]],
 fragment float4 overlay_fs(OOut in [[stage_in]]) {
     return float4(in.color.rgb * in.shade, in.color.a);
 }
+
+// MARK: decals & textures on part faces (DECAL_VS/DECAL_FS in the Android renderer)
+
+struct DecalInstance { float4x4 model; float4 tint; float4 uv; float4 normal; };
+
+struct DOut { float4 position [[position]]; float2 uv; float4 tint; float3 normal; };
+
+vertex DOut decal_vs(VIn in [[stage_in]], constant Frame& f [[buffer(1)]],
+                     const device DecalInstance* insts [[buffer(2)]], uint iid [[instance_id]]) {
+    DecalInstance d = insts[iid];
+    DOut o;
+    o.position = f.viewProj * (d.model * float4(in.pos, 1.0));
+    o.uv = in.uv * d.uv.xy + d.uv.zw;
+    o.tint = d.tint;
+    o.normal = d.normal.xyz;
+    return o;
+}
+
+fragment float4 decal_fs(DOut in [[stage_in]], constant Frame& f [[buffer(1)]],
+                         texture2d<float> tex [[texture(0)]], sampler smp [[sampler(0)]]) {
+    float4 t = tex.sample(smp, in.uv);
+    float diff = max(dot(normalize(in.normal), f.lightDir.xyz), 0.0);
+    float3 light = float3(f.params.x) + f.sunColor.rgb * diff;
+    return float4(t.rgb * in.tint.rgb * light, t.a * in.tint.a);
+}

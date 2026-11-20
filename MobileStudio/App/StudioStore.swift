@@ -224,6 +224,9 @@ final class StudioStore: ObservableObject, TreeListener {
             }
         }
         session.onSound = { [weak self] sound, on in self?.audio.set(sound, playing: on) }
+        session.assetLoader = { id, done in
+            AssetCache.shared.fetch(id) { url in done(url.flatMap { try? Data(contentsOf: $0) }) }
+        }
         play = session
         partsCacheStamp = -1
         session.start()

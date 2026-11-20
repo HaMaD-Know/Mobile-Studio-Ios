@@ -137,6 +137,15 @@ enum MeshFactory {
         return b.upload(d)
     }
 
+    /// Unit quad in the XY plane facing +Z, uv (0,0) top-left.
+    static func quad(_ d: MTLDevice) -> GPUMesh {
+        let v: [Float] = [
+            -0.5, 0.5, 0, 0, 0, 1, 0, 0,   0.5, 0.5, 0, 0, 0, 1, 1, 0,   0.5, -0.5, 0, 0, 0, 1, 1, 1,
+            -0.5, 0.5, 0, 0, 0, 1, 0, 0,   0.5, -0.5, 0, 0, 0, 1, 1, 1,  -0.5, -0.5, 0, 0, 0, 1, 0, 1,
+        ]
+        return GPUMesh(buffer: d.makeBuffer(bytes: v, length: v.count * 4, options: .storageModeShared)!, vertexCount: 6, primitive: .triangle)
+    }
+
     /// The 12 edges of a unit cube as a line list (selection boxes). Normals are zero = unshaded.
     static func boxEdges(_ d: MTLDevice) -> GPUMesh {
         var b = Builder()
