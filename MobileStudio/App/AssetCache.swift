@@ -32,6 +32,12 @@ final class AssetCache {
 
     func file(_ id: Int64) -> URL { dir.appendingPathComponent("\(id).bin") }
 
+    func clear() {
+        try? FileManager.default.removeItem(at: dir)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        failed.removeAll()
+    }
+
     /// Local file for a content URL when already downloaded (or bundled).
     func localURL(for content: String) -> URL? {
         if content.hasPrefix("rbxasset://") {

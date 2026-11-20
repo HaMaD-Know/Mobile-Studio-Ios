@@ -17,7 +17,7 @@ struct PropertiesView: View {
                         LabeledContent("Selected", value: "\(store.selection.count) objects")
                     }
                     if inst.isA("LuaSourceContainer") {
-                        Button("Edit Script", systemImage: "chevron.left.forwardslash.chevron.right") { editingScript = inst }
+                        Button("Edit Script", systemImage: "chevron.left.forwardslash.chevron.right") { store.editingScript = inst }
                     }
                 }
                 Section("Properties") {
@@ -35,9 +35,7 @@ struct PropertiesView: View {
             }
             .listStyle(.insetGrouped)
             .environment(\.defaultMinListRowHeight, 34)
-            .sheet(item: Binding(get: { editingScript.map(ScriptBox.init) }, set: { editingScript = $0?.inst })) { box in
-                ScriptEditorView(store: store, script: box.inst)
-            }
+
         } else {
             ContentUnavailableView("No Selection", systemImage: "cursorarrow.click.2",
                                    description: Text("Tap a part in the viewport or an item in the Explorer."))

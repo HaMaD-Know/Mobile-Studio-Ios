@@ -25,6 +25,8 @@ struct StartView: View {
     @ObservedObject var store: StudioStore
     @State private var showImporter = false
     @State private var recents: [URL] = []
+    @State private var showCloud = false
+    @State private var showSettings = false
 
     var body: some View {
         List {
@@ -46,6 +48,7 @@ struct StartView: View {
             }
             Section {
                 Button("Open File…", systemImage: "folder") { showImporter = true }
+                Button("Open from Roblox…", systemImage: "icloud.and.arrow.down") { showCloud = true }
             } footer: {
                 Text("Opens .rbxl / .rbxlx places and .rbxm / .rbxmx models from Files.")
             }
@@ -61,6 +64,9 @@ struct StartView: View {
             }
         }
         .navigationTitle("Mobile Studio")
+        .toolbar { ToolbarItem(placement: .primaryAction) { Button { showSettings = true } label: { Image(systemName: "gearshape") } } }
+        .sheet(isPresented: $showCloud) { CloudPlacesView(store: store, mode: .open) }
+        .sheet(isPresented: $showSettings) { SettingsView(store: store) }
         .onAppear { recents = Recents.all() }
         .fileImporter(isPresented: $showImporter, allowedContentTypes: UTType.robloxFiles) { r in
             if case .success(let url) = r { store.open(url) }

@@ -54,6 +54,11 @@ public final class ScriptRuntime: TreeListener {
     /// Studio selection access for the Selection service (edit runtime / plugins).
     public var selectionProvider: () -> [Instance] = { [] }
     public var selectionSetter: ([Instance]) -> Void = { _ in }
+    /// Called when plugins add/change toolbar buttons.
+    public var onPluginsChanged: () -> Void = {}
+    /// plugin:OpenScript.
+    public var openScriptHandler: (Instance) -> Void = { _ in }
+    func pluginsChanged() { onPluginsChanged() }
 
     /// `setup` runs before the global table is sandboxed (read-only), to add host globals.
     public init(dm: DataModel, isPlay: Bool, setup: ((ScriptRuntime) -> Void)? = nil) {
@@ -616,6 +621,13 @@ public final class ScriptRuntime: TreeListener {
         luaL_sandboxthread(co)
         pushInstanceOrNil(co, script)
         lua_rawsetfield(co, luau_swift_globalsindex(), "script")
+        // Scripts and modules inside a Plugin get the `plugin` global.
+        var top = script
+        while let p = top?.parent { top = p }
+        if let top, top.className == "Plugin" {
+            pushInstance(co, top)
+            lua_rawsetfield(co, luau_swift_globalsindex(), "plugin")
+        }
         return ThreadHandle(rt: self, co: co, ref: r)
     }
 

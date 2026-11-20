@@ -83,10 +83,11 @@ enum Services {
 
     static func methods(_ inst: Instance) -> Set<String> {
         if inst is DataModel { return table["DataModel"]! }
-        return table[inst.className] ?? []
+        return (table[inst.className] ?? []).union(PluginAPI.methods[inst.className] ?? [])
     }
 
     static func call(_ c: LuaCall, _ inst: Instance, _ m: String) throws -> Int32? {
+        if let n = try PluginAPI.call(c, inst, m) { return n }
         let rt = c.rt
         let cls = inst is DataModel ? "DataModel" : inst.className
         guard table[cls]?.contains(m) == true else { return nil }

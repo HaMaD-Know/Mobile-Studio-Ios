@@ -35,6 +35,10 @@ struct EditorView: View {
     @State private var confirmClose = false
     @State private var showFly = true
     @State private var detent: PresentationDetent = .fraction(0.12)
+    @State private var sheet: EditorSheet?
+    @State private var importingPlugin = false
+
+    enum EditorSheet: String, Identifiable { case settings, toolbox, cloudOpen, cloudPublish; var id: String { rawValue } }
 
     enum Panel: String, CaseIterable, Identifiable { case explorer = "Explorer", properties = "Properties", output = "Output"; var id: String { rawValue } }
 
@@ -67,6 +71,20 @@ struct EditorView: View {
         .navigationTitle(store.fileName + (store.dirty ? " •" : ""))
         .navigationBarTitleDisplayMode(.inline)
         .sheet(isPresented: $showInsert) { InsertObjectView { store.insertObject($0) } }
+        .sheet(item: $sheet) { which in
+            switch which {
+            case .settings: SettingsView(store: store)
+            case .toolbox: ToolboxView(store: store)
+            case .cloudOpen: CloudPlacesView(store: store, mode: .open)
+            case .cloudPublish: CloudPlacesView(store: store, mode: .publish)
+            }
+        }
+        .sheet(item: Binding(get: { store.editingScript.map(ScriptSheetItem.init) }, set: { store.editingScript = $0?.inst })) { item in
+            ScriptEditorView(store: store, script: item.inst)
+        }
+        .fileImporter(isPresented: $importingPlugin, allowedContentTypes: [.item]) { r in
+            if case .success(let url) = r { store.importPlugin(url) }
+        }
         .fileImporter(isPresented: $showImporter, allowedContentTypes: UTType.robloxFiles) { r in
             if case .success(let url) = r { store.open(url) }
         }
@@ -149,6 +167,9 @@ struct EditorView: View {
                 Button("Export Selection as Model…", systemImage: "shippingbox") { exportSelection() }
                     .disabled(store.selection.isEmpty)
                 Divider()
+                Button("Publish to Roblox…", systemImage: "icloud.and.arrow.up") { publish() }
+                Button("Open from Roblox…", systemImage: "icloud.and.arrow.down") { sheet = .cloudOpen }
+                Divider()
                 Button("Open…", systemImage: "folder") { showImporter = true }
                 Menu("New Place", systemImage: "doc.badge.plus") {
                     ForEach(PlaceFactory.Template.allCases) { t in Button(t.title) { store.newPlace(t) } }
@@ -174,6 +195,7 @@ struct EditorView: View {
                 Button("Corner Wedge", systemImage: "pyramid") { store.insertPart(shape: 4) }
                 Divider()
                 Button("Insert Object…", systemImage: "plus.square.dashed") { showInsert = true }
+                Button("Toolbox…", systemImage: "square.grid.2x2") { sheet = .toolbox }
                 Button("Insert Model File…", systemImage: "square.and.arrow.down") { showImporter = true }
             } label: { Image(systemName: "plus.circle") }
             Menu {
@@ -199,6 +221,16 @@ struct EditorView: View {
                 Toggle("Select Inside Models", isOn: $store.selectInsideModels)
                 Toggle("Fly Controls", isOn: $showFly)
             } label: { Image(systemName: "slider.horizontal.3") }
+            Menu {
+                ForEach(store.pluginButtons) { b in
+                    Button { store.pluginHost?.click(b.inst) } label: {
+                        Label(b.text, systemImage: b.active ? "checkmark.circle.fill" : "puzzlepiece.extension")
+                    }
+                }
+                if !store.pluginButtons.isEmpty { Divider() }
+                Button("Install Plugin…", systemImage: "square.and.arrow.down") { importingPlugin = true }
+                Button("Settings", systemImage: "gearshape") { sheet = .settings }
+            } label: { Image(systemName: "puzzlepiece.extension") }
             if hSize == .regular {
                 Button { withAnimation { showPanel.toggle() } } label: { Image(systemName: "sidebar.trailing") }
             }
@@ -215,6 +247,16 @@ struct EditorView: View {
         exportName = store.fileName
         exporting = BinaryFile(data: store.placeData())
     }
+    private func publish() {
+        guard let cloud = store.cloudPlace else { sheet = .cloudPublish; return }
+        Task {
+            do {
+                let v = try await RobloxWeb.publish(universe: cloud.0, place: cloud.1, bytes: store.placeData(), publish: true)
+                store.showToast("Published (" + v + ")")
+            } catch { store.showToast(error.localizedDescription) }
+        }
+    }
+
     private func exportSelection() {
         exportType = .rbxm
         exportName = store.selection.first?.name ?? "Model"
@@ -222,15 +264,39 @@ struct EditorView: View {
     }
 }
 
+struct ScriptSheetItem: Identifiable {
+    let inst: Instance
+    var id: ObjectIdentifier { ObjectIdentifier(inst) }
+}
+
+/// Output log plus the command bar (Luau in the edit model, or in the Play session while playing).
 struct OutputView: View {
     @ObservedObject var store: StudioStore
+    @State private var command = ""
     var body: some View {
-        ScrollViewReader { proxy in
-            List(Array(store.output.enumerated()), id: \.offset) { item in
-                Text(item.element).font(.system(.caption, design: .monospaced)).id(item.offset)
+        VStack(spacing: 0) {
+            ScrollViewReader { proxy in
+                List(Array(store.output.enumerated()), id: \.offset) { item in
+                    Text(item.element).font(.system(.caption, design: .monospaced))
+                        .foregroundStyle(item.element.hasPrefix("⛔︎") ? Color.red : (item.element.hasPrefix("⚠︎") ? Color.orange : Color.primary))
+                        .id(item.offset)
+                }
+                .listStyle(.plain)
+                .onChange(of: store.output.count) { _, n in proxy.scrollTo(n - 1, anchor: .bottom) }
             }
-            .listStyle(.plain)
-            .onChange(of: store.output.count) { _, n in proxy.scrollTo(n - 1, anchor: .bottom) }
+            HStack {
+                Image(systemName: "chevron.right").foregroundStyle(.secondary)
+                TextField("Run a command", text: $command)
+                    .font(.system(.footnote, design: .monospaced))
+                    .textInputAutocapitalization(.never).autocorrectionDisabled()
+                    .onSubmit {
+                        guard !command.isEmpty else { return }
+                        store.runCommand(command)
+                        command = ""
+                    }
+            }
+            .padding(8)
+            .background(Color(.secondarySystemBackground))
         }
     }
 }

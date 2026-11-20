@@ -44,6 +44,12 @@ final class StudioStore: ObservableObject, TreeListener {
     @Published var hudTick = 0
     private var hudCounter = 0
     let audio = AudioEngine()
+    /// Edit-time runtime for plugins and the command bar.
+    private(set) var pluginHost: PluginHost?
+    @Published var pluginButtons: [PluginHost.Button] = []
+    @Published var editingScript: Instance?
+    /// (universeId, placeId) when the place came from / was published to Roblox.
+    @Published var cloudPlace: (Int64, Int64)?
     /// On-screen fly controls: x strafe, y up/down, z forward.
     var flyInput = SIMD3<Float>(0, 0, 0)
     var flySpeed: Float = 40
@@ -62,6 +68,57 @@ final class StudioStore: ObservableObject, TreeListener {
         }
         session.onDirtyChanged = { [weak self] in self?.dirty = self?.session.dirty ?? false }
         session.model.addListener(self)
+        makePluginHost()
+    }
+
+    // MARK: plugins & command bar
+
+    static var pluginsFolder: URL {
+        let d = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("Plugins", isDirectory: true)
+        try? FileManager.default.createDirectory(at: d, withIntermediateDirectories: true)
+        return d
+    }
+
+    private func makePluginHost() {
+        pluginHost?.unloadAll()
+        let host = PluginHost(model: model)
+        host.onOutput = { [weak self] level, line in self?.log((level == .error ? "⛔︎ " : level == .warn ? "⚠︎ " : "") + line) }
+        host.rt.selectionProvider = { [weak self] in self?.session.selection ?? [] }
+        host.rt.selectionSetter = { [weak self] list in self?.session.select(list) }
+        host.rt.onPluginsChanged = { [weak self] in DispatchQueue.main.async { self?.refreshPluginButtons() } }
+        host.rt.openScriptHandler = { [weak self] s in self?.editingScript = s }
+        pluginHost = host
+        let files = (try? FileManager.default.contentsOfDirectory(at: StudioStore.pluginsFolder, includingPropertiesForKeys: nil)) ?? []
+        for f in files.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) {
+            let name = f.deletingPathExtension().lastPathComponent
+            switch f.pathExtension.lowercased() {
+            case "lua", "luau":
+                if let src = try? String(contentsOf: f, encoding: .utf8) { host.load(name: name, source: src) }
+            case "rbxm", "rbxmx":
+                if let d = try? Data(contentsOf: f), let doc = try? RbxFile.read(d) { host.load(name: name, roots: doc.roots) }
+            default: break
+            }
+        }
+        refreshPluginButtons()
+    }
+
+    func refreshPluginButtons() { pluginButtons = pluginHost?.buttons() ?? [] }
+
+    func importPlugin(_ url: URL) {
+        let access = url.startAccessingSecurityScopedResource()
+        defer { if access { url.stopAccessingSecurityScopedResource() } }
+        let dest = StudioStore.pluginsFolder.appendingPathComponent(url.lastPathComponent)
+        try? FileManager.default.removeItem(at: dest)
+        do {
+            try FileManager.default.copyItem(at: url, to: dest)
+            makePluginHost()
+            showToast("Installed plugin \(url.deletingPathExtension().lastPathComponent)")
+        } catch { showToast("Couldn't install plugin: \(error.localizedDescription)") }
+    }
+
+    func runCommand(_ code: String) {
+        log("> " + code)
+        if let play { play.rt.runCommand(code) } else { pluginHost?.runCommand(code) }
     }
 
     var model: DataModel { session.model }
@@ -131,6 +188,8 @@ final class StudioStore: ObservableObject, TreeListener {
         session.model.removeListener(self)
         session.replaceModel(dm)
         dm.addListener(self)
+        cloudPlace = nil
+        makePluginHost()
         fileURL = url
         fileName = name
         fileIsXml = xml
@@ -142,6 +201,17 @@ final class StudioStore: ObservableObject, TreeListener {
         }
         treeVersion += 1
         propsVersion += 1
+    }
+
+    /// Open a place downloaded from Roblox.
+    func openData(_ data: Data, name: String, cloud: (Int64, Int64)?) {
+        do {
+            let doc = try RbxFile.read(data)
+            for w in doc.warnings { log("⚠︎ \(w)") }
+            replace(PlaceFactory.fromDocument(doc), url: nil, name: name, xml: false)
+            cloudPlace = cloud
+            log("Opened \(name) from Roblox")
+        } catch { showToast("Could not open: \(error.localizedDescription)") }
     }
 
     /// Bytes for saving. The Android app writes binary; XML export is not ported yet, so .rbxlx
@@ -181,6 +251,7 @@ final class StudioStore: ObservableObject, TreeListener {
         let now = CACurrentMediaTime()
         let dt = Float(min(now - lastTick, 0.1))
         lastTick = now
+        if play == nil { pluginHost?.step(Double(dt)) }
         if let play {
             play.viewport = Vector2(Float(viewSize.width), Float(viewSize.height))
             play.step(dt)

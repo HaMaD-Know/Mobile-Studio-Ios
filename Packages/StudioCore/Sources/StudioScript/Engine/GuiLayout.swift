@@ -83,7 +83,7 @@ public enum GuiLayout {
         return (r.x + pl, r.y + pt, max(0, r.w - pl - pr), max(0, r.h - pt - pb))
     }
 
-    private static func children(_ parent: Instance, _ rect0: (x: Float, y: Float, w: Float, h: Float),
+    static func children(_ parent: Instance, _ rect0: (x: Float, y: Float, w: Float, h: Float),
                                  _ clip: (x: Float, y: Float, w: Float, h: Float)?, _ baseZ: Int,
                                  _ out: inout [GuiItem], _ order: inout Int) {
         let rect = padding(parent.findFirstChildOfClass("UIPadding"), rect0)
