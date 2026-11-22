@@ -18,9 +18,10 @@ struct ToolboxPanel: View {
 struct AppBadge: View {
     var size: CGFloat = 36
     var body: some View {
-        RoundedRectangle(cornerRadius: size * 0.22)
-            .fill(LinearGradient(colors: [Color(argb: -12417548), Color(argb: -11751600)], startPoint: .topLeading, endPoint: .bottomTrailing))
-            .overlay(Image(systemName: "photo.fill").font(.system(size: size * 0.5)).foregroundStyle(.white))
+        Image("AppLogo")
+            .resizable()
+            .scaledToFill()
             .frame(width: size, height: size)
+            .clipShape(RoundedRectangle(cornerRadius: size * 0.22))
     }
 }
