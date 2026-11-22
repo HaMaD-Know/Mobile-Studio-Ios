@@ -55,6 +55,60 @@ enum RobloxWeb {
         _ = try? await request("https://auth.roblox.com/v2/logout", method: "POST", authed: true)
     }
 
+    static func userByName(_ name: String) async throws -> User? {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        let body = try JSONSerialization.data(withJSONObject: ["usernames": [trimmed], "excludeBannedUsers": true])
+        let (d, r) = try await request("https://users.roblox.com/v1/usernames/users", method: "POST",
+                                       body: body, contentType: "application/json")
+        guard (200..<300).contains(r.statusCode) else { throw WebError(message: "HTTP \(r.statusCode)") }
+        let j = (try? JSONSerialization.jsonObject(with: d) as? [String: Any]) ?? [:]
+        guard let first = (j["data"] as? [[String: Any]])?.first,
+              let id = (first["id"] as? NSNumber)?.int64Value else { return nil }
+        return User(id: id, name: first["name"] as? String ?? trimmed,
+                    displayName: first["displayName"] as? String ?? trimmed)
+    }
+
+    // MARK: universe avatar settings (RobloxCloud.avatarSettings / setAvatarSettings)
+
+    struct AvatarSettings {
+        var type: Int            // 0 = R6, 1 = R15, 2 = Player Choice
+        var collision: Int?      // 0 = OuterBox, 1 = InnerBox
+        var min: [String: Float]
+        var max: [String: Float]
+    }
+
+    private static let avatarTypeNames: [String: Int] = ["MorphToR6": 0, "MorphToR15": 1, "PlayerChoice": 2]
+
+    static func avatarSettings(universe: Int64) async throws -> AvatarSettings? {
+        let j = try await json("https://develop.roblox.com/v1/universes/\(universe)/configuration", authed: true)
+        guard let typeStr = j["universeAvatarType"] as? String,
+              let type = avatarTypeNames[typeStr] else { return nil }
+        let collStr = j["universeCollisionType"] as? String
+        let collision: Int? = collStr == "OuterBox" ? 0 : (collStr == "InnerBox" ? 1 : nil)
+        func scales(_ obj: Any?) -> [String: Float] {
+            guard let dict = obj as? [String: Any] else { return [:] }
+            var out: [String: Float] = [:]
+            for (k, v) in dict { if let n = v as? NSNumber { out[k] = n.floatValue } }
+            return out
+        }
+        return AvatarSettings(type: type, collision: collision,
+                              min: scales(j["universeAvatarMinScales"]),
+                              max: scales(j["universeAvatarMaxScales"]))
+    }
+
+    static func setAvatarSettings(universe: Int64, _ s: AvatarSettings) async throws {
+        guard let typeStr = avatarTypeNames.first(where: { $0.value == s.type })?.key else { return }
+        var obj: [String: Any] = ["universeAvatarType": typeStr]
+        if let c = s.collision { obj["universeCollisionType"] = c == 1 ? "InnerBox" : "OuterBox" }
+        if !s.min.isEmpty { obj["universeAvatarMinScales"] = s.min.mapValues { Double($0) } }
+        if !s.max.isEmpty { obj["universeAvatarMaxScales"] = s.max.mapValues { Double($0) } }
+        let body = try JSONSerialization.data(withJSONObject: obj)
+        let (_, r) = try await request("https://develop.roblox.com/v2/universes/\(universe)/configuration",
+                                       method: "PATCH", body: body, contentType: "application/json", authed: true)
+        guard (200..<300).contains(r.statusCode) else { throw WebError(message: "HTTP \(r.statusCode)") }
+    }
+
     // MARK: Toolbox
 
     enum Category: Int, CaseIterable, Identifiable {

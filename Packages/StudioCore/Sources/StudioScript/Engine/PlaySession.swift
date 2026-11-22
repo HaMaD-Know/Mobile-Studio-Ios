@@ -243,15 +243,20 @@ public final class PlaySession: ScriptHost {
         guard let p = player else { return }
         if let old = character { rt.fire(p, "CharacterRemoving", [.object(.instance(old))]); old.destroy() }
         let ch: Instance
-        if let tpl = dm.findService("StarterPlayer")?.findFirstChild("StarterCharacter"), tpl.isA("Model") {
+        let sp = dm.findService("StarterPlayer")
+        if let tpl = sp?.findFirstChild("StarterCharacter"), tpl.isA("Model") {
             ch = tpl.cloneTree()
             ch.name = p.name
+            ModelMath.pivotTo(ch, spawnLocation())
+        } else if let custom = customCharacter {
+            ch = CharacterBuilder.wrapCustomCharacter(custom, name: p.name)
             ModelMath.pivotTo(ch, spawnLocation())
         } else {
             ch = wantR15 ? CharacterBuilder.buildR15(name: p.name, at: spawnLocation())
                          : CharacterBuilder.buildR6(name: p.name, at: spawnLocation())
             if !wantR15 { CharacterBuilder.addR6Attachments(ch) }
-            if let avatar { CharacterBuilder.apply(avatar, to: ch) }
+            let loadApp = sp?.get("LoadCharacterAppearance")?.asBool != false
+            if loadApp, let avatar { CharacterBuilder.apply(avatar, to: ch) }
         }
         if let scripts = dm.findService("StarterPlayer")?.findFirstChild("StarterCharacterScripts") {
             for s in scripts.children { s.cloneTree().attachRaw(ch) }
@@ -275,6 +280,11 @@ public final class PlaySession: ScriptHost {
 
     /// The player's avatar (set by the app once it has loaded it; respawns to apply).
     public var avatar: AvatarSpec? {
+        didSet { if running, character != nil, deadTimer == nil { spawnCharacter() } }
+    }
+
+    /// Optional custom Model or BasePart to spawn as instead of a rig.
+    public var customCharacter: Instance? {
         didSet { if running, character != nil, deadTimer == nil { spawnCharacter() } }
     }
 

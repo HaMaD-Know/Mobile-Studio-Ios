@@ -191,27 +191,16 @@ struct RibbonView: View {
     // MARK: Avatar
 
     @ViewBuilder private var avatarTab: some View {
-        RibbonGroup(caption: "Playtest") {
-            RibbonMenu(icon: "person.crop.circle.fill", tint: Th.info, label: "Avatar") {
-                Toggle("Use My Roblox Avatar", isOn: Binding(
-                    get: { UserDefaults.standard.object(forKey: "useMyAvatar") as? Bool ?? true },
-                    set: { UserDefaults.standard.set($0, forKey: "useMyAvatar") }))
-                if !AccountStore.shared.isSignedIn {
-                    Text("Sign in (Settings) to play as your avatar")
-                }
-            }
-            RibbonMenu(icon: "cube.transparent.fill", tint: Color(argb: -3355444), label: "Character") {
-                Button("R6") { setAvatarType(0) }
-                Button("R15") { setAvatarType(1) }
-                Button("Player's Choice") { setAvatarType(2) }
-            }
+        RibbonGroup(caption: "Game") {
+            RibbonButton(icon: "gearshape.fill", tint: Color(argb: -3355444), label: "Game Settings") { modal = .gameSettings }
         }
-    }
-
-    private func setAvatarType(_ v: UInt32) {
-        guard let sp = store.model.findService("StarterPlayer") else { store.showToast("No StarterPlayer in this place"); return }
-        store.setProp(sp, "GameSettingsAvatar", .enumValue(EnumValue(v)))
-        store.showToast(v == 0 ? "Playtest as R6" : v == 1 ? "Playtest as R15" : "Playtest with the player's choice")
+        RibbonGroup(caption: "Rig Builder") {
+            RibbonButton(icon: "person.fill", tint: Th.play, label: "Rig Builder") { modal = .rigBuilder }
+        }
+        RibbonGroup(caption: "Playtest") {
+            RibbonButton(icon: "person.crop.circle.fill", tint: Th.info, label: "Avatar") { modal = .playtestAvatar }
+            RibbonButton(icon: "cube.transparent.fill", tint: Color(argb: -3355444), label: "Character") { modal = .customCharacter }
+        }
     }
 
     // MARK: UI

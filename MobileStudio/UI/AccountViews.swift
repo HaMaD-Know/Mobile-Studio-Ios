@@ -55,8 +55,8 @@ struct SettingsView: View {
                 }
                 Section("Play") {
                     Toggle("Use My Roblox Avatar", isOn: Binding(
-                        get: { UserDefaults.standard.object(forKey: "useMyAvatar") as? Bool ?? true },
-                        set: { UserDefaults.standard.set($0, forKey: "useMyAvatar") }))
+                        get: { AvatarLoader.mode == .account },
+                        set: { AvatarLoader.mode = $0 ? .account : .classic }))
                         .disabled(!account.isSignedIn)
                 }
                 Section("Editor") {

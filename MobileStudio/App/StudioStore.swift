@@ -244,6 +244,7 @@ final class StudioStore: ObservableObject, TreeListener {
             replace(PlaceFactory.fromDocument(doc), url: nil, name: name, xml: false)
             cloudPlace = cloud
             log("Opened \(name) from Roblox")
+            if let u = cloud?.0, u != 0 { syncAvatarSettingsFromCloud(universe: u) }
         } catch { showToast("Could not open: \(error.localizedDescription)") }
     }
 
@@ -332,7 +333,9 @@ final class StudioStore: ObservableObject, TreeListener {
             }
         }
         session.onSound = { [weak self] sound, on in self?.audio.set(sound, playing: on) }
-        if UserDefaults.standard.object(forKey: "useMyAvatar") as? Bool ?? true, let uid = AccountStore.shared.userId {
+        if AvatarLoader.mode == .character {
+            session.customCharacter = AvatarLoader.loadCharacter()
+        } else if let uid = AvatarLoader.activeUserId {
             Task { [weak session] in
                 if let spec = await AvatarLoader.load(userId: uid) { session?.avatar = spec }
             }
@@ -438,6 +441,77 @@ final class StudioStore: ObservableObject, TreeListener {
         session.select([i])
         log("Inserted \(cls)")
         return i
+    }
+
+    // MARK: Rig Builder, Custom Character & Cloud Avatar Sync (AvatarUi)
+
+    func insertRig(r15: Bool, useAvatar: Bool) {
+        guard play == nil else { showToast("Stop the playtest to insert a rig"); return }
+        if useAvatar, let uid = AvatarLoader.activeUserId {
+            let label = (AvatarLoader.activeAvatarLabel ?? "Rig").trimmingCharacters(in: CharacterSet(charactersIn: "@"))
+            Task {
+                let spec = await AvatarLoader.load(userId: uid)
+                let m = r15 ? CharacterBuilder.buildR15(name: label, at: .identity)
+                            : CharacterBuilder.buildR6(name: label, at: .identity)
+                if !r15 { CharacterBuilder.addR6Attachments(m) }
+                if let spec { CharacterBuilder.apply(spec, to: m) }
+                placeAndInsertRig(m)
+            }
+        } else {
+            let m = r15 ? CharacterBuilder.buildR15(name: "Rig", at: .identity)
+                        : CharacterBuilder.buildR6(name: "Rig", at: .identity)
+            if !r15 { CharacterBuilder.addR6Attachments(m) }
+            placeAndInsertRig(m)
+        }
+    }
+
+    private func placeAndInsertRig(_ m: Instance) {
+        let parts = m.descendants().filter { $0.isA("BasePart") }
+        guard let b = Picking.bounds(parts) else { return }
+        let sp = spawnPoint()
+        let fwd = camera.forward
+        let cf = CFrame.at(Vector3(sp.x, sp.y - b.min.y, sp.z)) * .ry(atan2(fwd.x, fwd.z))
+        for p in parts { p.set("CFrame", .cframe(cf * PartData.cframe(p)), notify: false) }
+        m.findFirstChild("HumanoidRootPart")?.set("Anchored", .bool(true), notify: false)
+        session.undo.begin("Insert Rig")
+        try? session.reparent(m, model.workspace)
+        session.undo.commit()
+        session.select([m])
+        dirty = true
+        showToast("Inserted \(m.name)")
+    }
+
+    func saveCustomCharacter(_ inst: Instance) {
+        let hasPart = inst.isA("BasePart") || inst.descendants().contains { $0.isA("BasePart") }
+        guard hasPart else { showToast("\(inst.name) has no parts to play as"); return }
+        let bytes = RbxBinaryWriter.write([inst], meta: OrderedDict())
+        do {
+            try AvatarLoader.saveCharacter(data: bytes, name: inst.name)
+            log("Playtest avatar: you'll spawn as \(inst.name) in every place")
+            showToast("You'll play as \(inst.name) in every place")
+        } catch {
+            showToast("Couldn't save \(inst.name)")
+        }
+    }
+
+    func syncAvatarSettingsFromCloud(universe: Int64) {
+        guard universe != 0, AccountStore.shared.isSignedIn else { return }
+        Task {
+            guard let s = try? await RobloxWeb.avatarSettings(universe: universe) else { return }
+            guard cloudPlace?.0 == universe, play == nil,
+                  let sp = model.findService("StarterPlayer") else { return }
+            sp.set("GameSettingsAvatar", .enumValue(EnumValue(UInt32(s.type))), notify: false)
+            if let c = s.collision {
+                sp.set("GameSettingsR15Collision", .enumValue(EnumValue(UInt32(c))), notify: false)
+            }
+            for def in GameSettingsView.scaleDefs {
+                if let lo = s.min[def.apiKey], let hi = s.max[def.apiKey] {
+                    sp.set("GameSettingsScaleRange\(def.key)", .numberRange(NumberRange(lo, hi)), notify: false)
+                }
+            }
+            let name = ["R6", "R15", "Player Choice"][min(2, max(0, s.type))]
+            log("Game Settings: avatar type \(name) (from the game on Roblox)")
+        }
     }
 
     func toggleBoxSelect() {

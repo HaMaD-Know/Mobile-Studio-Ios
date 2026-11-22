@@ -132,4 +132,19 @@ final class StudioScriptTests: XCTestCase {
         XCTAssertEqual(PartData.cframe(root).position.y, 4, accuracy: 0.6)
         play.stop()
     }
+
+    func testRigAndCustomCharacter() {
+        let r6 = CharacterBuilder.buildR6(name: "Rig")
+        CharacterBuilder.addR6Attachments(r6)
+        XCTAssertNotNil(r6.findFirstChild("Head")?.findFirstChild("HatAttachment"))
+        let r15 = CharacterBuilder.buildR15(name: "Rig15")
+        XCTAssertNotNil(r15.findFirstChild("UpperTorso"))
+
+        let block = InstanceFactory.create("Part")
+        block.name = "Box"
+        let wrapped = CharacterBuilder.wrapCustomCharacter(block, name: "Player1")
+        XCTAssertEqual(wrapped.className, "Model")
+        XCTAssertNotNil(wrapped.findFirstChild("HumanoidRootPart"))
+        XCTAssertNotNil(wrapped.findFirstChildOfClass("Humanoid"))
+    }
 }

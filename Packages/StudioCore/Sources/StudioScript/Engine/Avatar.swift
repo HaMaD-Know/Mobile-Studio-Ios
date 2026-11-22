@@ -22,7 +22,7 @@ extension CharacterBuilder {
     }
 
     /// Accessory attachment points on an R6 rig.
-    static func addR6Attachments(_ m: Instance) {
+    public static func addR6Attachments(_ m: Instance) {
         if let h = m.findFirstChild("Head") {
             attachment("HatAttachment", Vector3(0, 0.6, 0), h)
             attachment("HairAttachment", Vector3(0, 0.6, 0), h)
@@ -43,6 +43,56 @@ extension CharacterBuilder {
         if let a = m.findFirstChild("Right Arm") { attachment("RightShoulderAttachment", Vector3(0, 1, 0), a); attachment("RightGripAttachment", Vector3(0, -1, 0), a) }
         if let l = m.findFirstChild("Left Leg") { attachment("LeftFootAttachment", Vector3(0, -1, 0), l) }
         if let l = m.findFirstChild("Right Leg") { attachment("RightFootAttachment", Vector3(0, -1, 0), l) }
+    }
+
+    /// Wraps any Model or BasePart into a playable character Model with a HumanoidRootPart and Humanoid.
+    public static func wrapCustomCharacter(_ source: Instance, name: String) -> Instance {
+        let m: Instance
+        if source.isA("Model") {
+            m = source.cloneTree()
+        } else {
+            m = InstanceFactory.create("Model")
+            source.cloneTree().attachRaw(m)
+        }
+        m.name = name
+        let parts = m.descendants().filter { $0.isA("BasePart") }
+        for p in parts { p.set("Anchored", .bool(false), notify: false) }
+        var root = m.findFirstChild("HumanoidRootPart")
+        if root == nil {
+            if let pp = m.get("PrimaryPart")?.asInstance, pp.isA("BasePart") {
+                root = pp
+            } else if let first = parts.first {
+                // Create an invisible root part centred in the model and weld parts to it.
+                var lo = Vector3(.greatestFiniteMagnitude, .greatestFiniteMagnitude, .greatestFiniteMagnitude)
+                var hi = -lo
+                for p in parts {
+                    let pos = PartData.cframe(p).position, h = PartData.size(p) * 0.5
+                    lo = lo.min(pos - h); hi = hi.max(pos + h)
+                }
+                let r = InstanceFactory.create("Part")
+                r.name = "HumanoidRootPart"
+                r.set("size", .vector3(Vector3(2, 2, 1)), notify: false)
+                r.set("CFrame", .cframe(.at((lo + hi) * 0.5)), notify: false)
+                r.set("Transparency", .float(1), notify: false)
+                r.set("CanCollide", .bool(false), notify: false)
+                r.set("Anchored", .bool(false), notify: false)
+                r.attachRaw(m)
+                for p in parts {
+                    let w = InstanceFactory.create("WeldConstraint")
+                    w.set("Part0", .ref(r), notify: false)
+                    w.set("Part1", .ref(p), notify: false)
+                    w.attachRaw(r)
+                }
+                _ = first
+                root = r
+            }
+        }
+        if let root { m.set("PrimaryPart", .ref(root), notify: false) }
+        if m.findFirstChildOfClass("Humanoid") == nil {
+            let h = InstanceFactory.create("Humanoid")
+            h.attachRaw(m)
+        }
+        return m
     }
 
     /// Blocky R15 rig: same overall height as R6 (root 3 studs above the feet), standard part

@@ -64,6 +64,7 @@ final class DockState: ObservableObject {
 
 enum EditorModal: String, Identifiable {
     case insertObject, settings, cloudOpen, cloudPublish, colors, about
+    case rigBuilder, gameSettings, playtestAvatar, customCharacter
     var id: String { rawValue }
 }
 
@@ -131,6 +132,13 @@ struct EditorView: View {
         case .cloudPublish: CloudPlacesView(store: store, mode: .publish)
         case .colors: BrickColorPalette { c in store.setOnSelectedParts("Color3uint8", .color3(c), label: "Color") }
         case .about: AboutView()
+        case .rigBuilder: RigBuilderView(store: store)
+        case .gameSettings: GameSettingsView(store: store)
+        case .playtestAvatar:
+            PlaytestAvatarView(store: store,
+                               onOpenGameSettings: { DispatchQueue.main.async { modal = .gameSettings } },
+                               onOpenCustomCharacter: { DispatchQueue.main.async { modal = .customCharacter } })
+        case .customCharacter: CustomCharacterView(store: store)
         }
     }
 
