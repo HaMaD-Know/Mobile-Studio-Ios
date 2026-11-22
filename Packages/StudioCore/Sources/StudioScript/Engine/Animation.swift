@@ -105,9 +105,15 @@ public final class AnimLibrary {
         loader("rbxassetid://\(id)") { [weak self] data in
             guard let self else { return }
             self.pending.remove(id)
-            guard let data, let doc = try? RbxFile.read(data),
-                  let seq = doc.roots.flatMap({ [$0] + $0.descendants() }).first(where: { $0.className == "KeyframeSequence" || $0.className == "CurveAnimation" }),
-                  let clip = AnimClip.fromInstance(seq) else { self.failed.insert(id); return }
+            guard let data, let doc = try? RbxFile.read(data) else { self.failed.insert(id); return }
+            var found: Instance?
+            for r in doc.roots {
+                if r.className == "KeyframeSequence" || r.className == "CurveAnimation" { found = r; break }
+                if let d = r.descendants().first(where: { $0.className == "KeyframeSequence" || $0.className == "CurveAnimation" }) {
+                    found = d; break
+                }
+            }
+            guard let seq = found, let clip = AnimClip.fromInstance(seq) else { self.failed.insert(id); return }
             self.clips[id] = clip
         }
         return nil
