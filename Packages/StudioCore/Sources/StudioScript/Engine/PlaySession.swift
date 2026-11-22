@@ -46,6 +46,7 @@ public final class PlaySession: ScriptHost {
     let animLib = AnimLibrary()
     let animPlayer = AnimPlayer()
     private var defaultPose = ""
+    private var pendingEmote: (key: String, id: String)?
     /// Asset loader (content id -> bytes) the app provides for animations.
     public var assetLoader: ((String, @escaping (Data?) -> Void) -> Void)? {
         get { animLib.loader }
@@ -261,7 +262,10 @@ public final class PlaySession: ScriptHost {
         if let scripts = dm.findService("StarterPlayer")?.findFirstChild("StarterCharacterScripts") {
             for s in scripts.children { s.cloneTree().attachRaw(ch) }
         }
+        DefaultAnimate.attach(to: ch, r15: ch.findFirstChild("UpperTorso") != nil)
         character = ch
+        defaultPose = ""
+        animPlayer.clear()
         charVelocity = .zero
         deadTimer = nil
         seat = nil
@@ -548,16 +552,64 @@ public final class PlaySession: ScriptHost {
         animTime += dt * (pose == "walk" ? max(1, speed / 16) : 1)
         let r15 = ch.findFirstChild("UpperTorso") != nil
 
-        // Default animations: switch clip when the pose changes.
-        if pose != defaultPose {
-            animPlayer.stopTag("default", fade: 0.2)
-            defaultPose = pose
-        }
-        if !animPlayer.isPlaying("default"), pose != "dead",
-           let ids = (r15 ? DefaultAnimations.r15 : DefaultAnimations.r6)[pose], let id = ids.first,
-           let clip = animLib.clip("rbxassetid://\(id)") {
-            let t = animPlayer.play(clip, tag: "default", fade: 0.2, speed: pose == "walk" ? max(0.5, speed / 16) : 1, priority: 0)
-            t.looped = pose != "jump"
+        // Default animations driven by the builtin Animate tree (skipped if user disabled/replaced Animate).
+        let cfg = DefaultAnimate.config(of: ch)
+        if let cfg {
+            if pose != "idle" { animPlayer.stopTag("emote", fade: 0.15); pendingEmote = nil }
+            if let pe = pendingEmote, let clip = animLib.clip(pe.id) {
+                pendingEmote = nil
+                let t = animPlayer.play(clip, tag: "emote", fade: 0.15, priority: 2)
+                t.looped = DefaultAnimate.loopingEmotes.contains(pe.key)
+            }
+            if pose != defaultPose {
+                animPlayer.stopTag("default", fade: 0.2)
+                animPlayer.stopTag("defaultRun", fade: 0.2)
+                defaultPose = pose
+            }
+            if pose == "walk" && r15 {
+                let runBlend = min(1, max(0, (speed - 6.4) / 6.4))
+                let walkWeight = max(0.01, 1 - runBlend)
+                let runWeight = max(0.01, runBlend)
+                let rate = max(0.5, speed / 14.5)
+                if !animPlayer.isPlaying("default"),
+                   let id = DefaultAnimate.pick(cfg["walk"]),
+                   let clip = animLib.clip(id) {
+                    let t = animPlayer.play(clip, tag: "default", fade: 0.2, weight: walkWeight, speed: rate, priority: 0)
+                    t.looped = true
+                }
+                if !animPlayer.isPlaying("defaultRun"),
+                   let id = DefaultAnimate.pick(cfg["run"]),
+                   let clip = animLib.clip(id) {
+                    let t = animPlayer.play(clip, tag: "defaultRun", fade: 0.2, weight: runWeight, speed: rate, priority: 0)
+                    t.looped = true
+                }
+                for tr in animPlayer.tracks where !tr.stopping {
+                    if tr.tag == "default" { tr.targetWeight = walkWeight; tr.speed = rate }
+                    else if tr.tag == "defaultRun" { tr.targetWeight = runWeight; tr.speed = rate }
+                }
+            } else if !animPlayer.isPlaying("default"), pose != "dead",
+                      let id = DefaultAnimate.pick(cfg[pose]),
+                      let clip = animLib.clip(id) {
+                let t = animPlayer.play(clip, tag: "default", fade: 0.2, speed: pose == "walk" ? max(0.5, speed / 16) : 1, priority: 0)
+                t.looped = pose != "jump"
+            }
+            let hasTool = ch.children.contains { $0.className == "Tool" }
+            if hasTool && pose != "dead" {
+                if !animPlayer.isPlaying("tool"),
+                   let id = DefaultAnimate.pick(cfg["toolnone"]),
+                   let clip = animLib.clip(id) {
+                    let t = animPlayer.play(clip, tag: "tool", fade: 0.1, priority: 1)
+                    t.looped = true
+                }
+            } else {
+                animPlayer.stopTag("tool", fade: 0.1)
+            }
+        } else {
+            animPlayer.stopTag("default", fade: 0.1)
+            animPlayer.stopTag("defaultRun", fade: 0.1)
+            animPlayer.stopTag("tool", fade: 0.1)
+            animPlayer.stopTag("emote", fade: 0.1)
+            defaultPose = ""
         }
 
         // Script tracks waiting for their clip to download.
@@ -578,7 +630,7 @@ public final class PlaySession: ScriptHost {
                 animated = true
             }
         }
-        if !animated, r15 {
+        if !animated, cfg != nil, r15 {
             func joint(_ part: String, _ angle: Float) {
                 ch.findFirstChild(part)?.children.first { $0.className == "Motor6D" }?.set("Transform", .cframe(CFrame.rx(angle)), notify: false)
             }
@@ -592,7 +644,7 @@ public final class PlaySession: ScriptHost {
             joint("RightUpperArm", -arm); joint("LeftUpperArm", pose == "jump" || pose == "fall" ? -arm : arm)
             joint("RightUpperLeg", pose == "sit" ? leg : leg); joint("LeftUpperLeg", pose == "sit" ? leg : -leg)
         }
-        if !animated, !r15, let torso = ch.findFirstChild("Torso") {
+        if !animated, cfg != nil, !r15, let torso = ch.findFirstChild("Torso") {
             func setMotor(_ name: String, _ angle: Float) {
                 torso.findFirstChild(name)?.set("Transform", .cframe(CFrame.rz(angle)), notify: false)
             }
@@ -794,12 +846,33 @@ public final class PlaySession: ScriptHost {
         if let p = from { rt.fire(p, "Chatted", [.string(text)]) }
     }
 
+    /// Play one of Roblox's default emotes (`wave`, `point`, `cheer`, `laugh`, `dance`, `dance2`, `dance3`).
+    public func playEmote(_ name: String) {
+        guard let ch = character, let cfg = DefaultAnimate.config(of: ch) else { return }
+        let key = name.lowercased()
+        guard let id = DefaultAnimate.pick(cfg[key]) else { return }
+        animPlayer.stopTag("emote", fade: 0.1)
+        if let clip = animLib.clip(id) {
+            pendingEmote = nil
+            let t = animPlayer.play(clip, tag: "emote", fade: 0.15, priority: 2)
+            t.looped = DefaultAnimate.loopingEmotes.contains(key)
+        } else {
+            pendingEmote = (key, id)
+        }
+    }
+
     public func sendChat(_ text: String) {
         guard let p = player else { return }
-        if text.hasPrefix("/") { return }
-        chat(p, text)
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.hasPrefix("/e ") || trimmed.hasPrefix("/emote ") {
+            let emote = trimmed.split(separator: " ", maxSplits: 1).last.map(String.init) ?? ""
+            if !emote.isEmpty { playEmote(emote) }
+            return
+        }
+        if trimmed.hasPrefix("/") { return }
+        chat(p, trimmed)
         if let ch = dm.findService("TextChatService")?.findFirstChild("TextChannels")?.findFirstChild("RBXGeneral") {
-            rt.fire(ch, "MessageReceived", [.table([(.string("Text"), .string(text)),
+            rt.fire(ch, "MessageReceived", [.table([(.string("Text"), .string(trimmed)),
                                                     (.string("TextSource"), .table([(.string("Name"), .string(p.name)), (.string("UserId"), .number(1))]))])])
         }
     }

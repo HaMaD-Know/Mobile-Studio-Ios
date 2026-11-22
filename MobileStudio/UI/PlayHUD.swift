@@ -13,6 +13,13 @@ struct PlayHUD: View {
     var body: some View {
         let _ = store.hudTick
         ZStack {
+            if play.shiftLock {
+                ZStack {
+                    Circle().stroke(.white.opacity(0.85), lineWidth: 2).frame(width: 18, height: 18)
+                    Circle().fill(.white.opacity(0.85)).frame(width: 4, height: 4)
+                }
+                .allowsHitTesting(false)
+            }
             VStack {
                 HStack(alignment: .top) {
                     VStack(alignment: .leading, spacing: 8) {
@@ -20,7 +27,10 @@ struct PlayHUD: View {
                         if showChat { chatBox }
                     }
                     Spacer()
-                    leaderstats
+                    VStack(alignment: .trailing, spacing: 8) {
+                        healthBar
+                        leaderstats
+                    }
                 }
                 .padding(12)
                 Spacer()
@@ -69,27 +79,63 @@ struct PlayHUD: View {
         }
     }
 
-    /// Roblox-style menu / chat / more pill.
+    /// Roblox-style menu / chat / emotes / more pill.
     private var topPill: some View {
-        HStack(spacing: 18) {
+        HStack(spacing: 16) {
             Menu {
+                Button("Reset Character", systemImage: "arrow.counterclockwise") {
+                    if let p = play.player { play.respawn(p) }
+                }
+                Button(play.shiftLock ? "Disable Shift Lock" : "Enable Shift Lock", systemImage: "scope") {
+                    play.shiftLock.toggle()
+                }
+                Divider()
                 Button("Stop Playtest", systemImage: "stop.fill", role: .destructive) { store.stopPlay() }
             } label: {
                 Image(systemName: "square.fill").font(.system(size: 22)).rotationEffect(.degrees(15)).foregroundStyle(.white)
             }
             Rectangle().fill(.white.opacity(0.3)).frame(width: 1, height: 26)
             Button { showChat.toggle() } label: {
-                Image(systemName: "bubble.left").font(.system(size: 22)).foregroundStyle(.white)
+                Image(systemName: "bubble.left").font(.system(size: 21)).foregroundStyle(showChat ? .white : .white.opacity(0.6))
+            }
+            if play.character != nil {
+                Menu {
+                    ForEach(DefaultAnimate.emoteNames, id: \.key) { emote in
+                        Button(emote.title) { play.sendChat("/e " + emote.key) }
+                    }
+                } label: {
+                    Image(systemName: "figure.wave").font(.system(size: 20)).foregroundStyle(.white)
+                }
             }
             Menu {
                 Button(showChat ? "Hide Chat" : "Show Chat") { showChat.toggle() }
+                Button(play.shiftLock ? "Disable Shift Lock" : "Enable Shift Lock") { play.shiftLock.toggle() }
+                Button("Reset Character") { if let p = play.player { play.respawn(p) } }
+                Divider()
                 Button("Stop Playtest", role: .destructive) { store.stopPlay() }
             } label: {
-                Image(systemName: "ellipsis").font(.system(size: 22, weight: .bold)).foregroundStyle(.white)
+                Image(systemName: "ellipsis").font(.system(size: 21, weight: .bold)).foregroundStyle(.white)
             }
         }
-        .padding(.horizontal, 20).frame(height: 50)
+        .padding(.horizontal, 18).frame(height: 50)
         .background(Color.black.opacity(0.55), in: Capsule())
+    }
+
+    @ViewBuilder private var healthBar: some View {
+        if let hum = play.character?.findFirstChildOfClass("Humanoid") {
+            let hp = hum.get("Health_XML")?.asFloat ?? hum.get("Health")?.asFloat ?? 100
+            let maxHp = max(hum.get("MaxHealth")?.asFloat ?? 100, 1)
+            if hp < maxHp {
+                let frac = max(0, min(1, CGFloat(hp / maxHp)))
+                let barColor: Color = frac > 0.5 ? Color(red: 0.17, green: 0.82, blue: 0.36)
+                    : (frac > 0.25 ? Color(red: 0.96, green: 0.77, blue: 0.09) : Color(red: 0.92, green: 0.26, blue: 0.26))
+                ZStack(alignment: .leading) {
+                    Capsule().fill(Color.black.opacity(0.5))
+                    Capsule().fill(barColor).frame(width: 120 * frac)
+                }
+                .frame(width: 120, height: 8)
+            }
+        }
     }
 
     private var chatBox: some View {

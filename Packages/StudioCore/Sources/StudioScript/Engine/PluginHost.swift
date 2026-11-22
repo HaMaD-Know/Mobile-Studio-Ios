@@ -33,7 +33,11 @@ public final class PluginHost {
         set { rt.onOutput = newValue }
     }
 
-    public func step(_ dt: Double) { rt.step(dt) }
+    public func step(_ dt: Double) {
+        rt.step(dt)
+        EditAnimation.shared.step(Float(dt))
+        EditAnimation.shared.flush()
+    }
     public func runCommand(_ code: String) { rt.runCommand(code) }
 
     /// Load a plugin from source (.lua) or a model file's roots.

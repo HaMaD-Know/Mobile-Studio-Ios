@@ -130,7 +130,11 @@ struct EditorView: View {
         case .settings: SettingsView(store: store)
         case .cloudOpen: CloudPlacesView(store: store, mode: .open)
         case .cloudPublish: CloudPlacesView(store: store, mode: .publish)
-        case .colors: BrickColorPalette { c in store.setOnSelectedParts("Color3uint8", .color3(c), label: "Color") }
+        case .colors:
+            StudioColorPickerSheet(
+                title: "Part Color",
+                initial: store.session.selectedParts().first.map(PartData.color) ?? Color3(0.64, 0.64, 0.65)
+            ) { c in store.setOnSelectedParts("Color3uint8", .color3(c), label: "Color") }
         case .about: AboutView()
         case .rigBuilder: RigBuilderView(store: store)
         case .gameSettings: GameSettingsView(store: store)

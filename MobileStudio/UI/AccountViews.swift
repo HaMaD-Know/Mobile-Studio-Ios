@@ -155,6 +155,7 @@ struct ToolboxView: View {
     @State private var cursor: String?
     @State private var loading = false
     @State private var error: String?
+    @State private var audioSearchTrigger = 0
     @Environment(\.dismiss) private var dismiss
 
     @State private var section = "Creator Store"
@@ -210,43 +211,62 @@ struct ToolboxView: View {
     private var store_: some View {
         VStack(spacing: 8) {
             HStack(spacing: 6) {
-                TextField("", text: $query, prompt: Text("Search the Creator Store").foregroundStyle(Th.dim))
+                TextField("", text: $query, prompt: Text(category == .audio ? "Search audio" : "Search the Creator Store").foregroundStyle(Th.dim))
                     .textInputAutocapitalization(.never).autocorrectionDisabled()
-                    .onSubmit { Task { await load(more: false) } }
+                    .onSubmit {
+                        if category == .audio { audioSearchTrigger += 1 }
+                        else { Task { await load(more: false) } }
+                    }
                     .studioField()
-                PanelIconButton(icon: "magnifyingglass") { Task { await load(more: false) } }
+                PanelIconButton(icon: "magnifyingglass") {
+                    if category == .audio { audioSearchTrigger += 1 }
+                    else { Task { await load(more: false) } }
+                }
             }
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 6) {
                     ForEach(RobloxWeb.Category.allCases) { c in
                         Chip(label: c == .decals ? "Images" : c.label, selected: category == c) {
                             category = c
-                            Task { await load(more: false) }
+                            if c != .audio {
+                                store.audio.stopPreview()
+                                Task { await load(more: false) }
+                            }
                         }
                     }
                 }
             }
-            if let error { Text(error).font(.system(size: 12)).foregroundStyle(Th.error) }
-            ScrollView {
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 110), spacing: 10)], spacing: 10) {
-                    ForEach(items) { it in
-                        Button { insert(it) } label: {
-                            VStack(alignment: .leading, spacing: 4) {
-                                AsyncImage(url: it.thumbnail) { img in img.resizable().scaledToFit() } placeholder: { Th.hover }
-                                    .frame(maxWidth: .infinity).aspectRatio(1, contentMode: .fit)
-                                    .background(Th.card)
-                                    .clipShape(RoundedRectangle(cornerRadius: 6))
-                                Text(it.name).font(.system(size: 12)).foregroundStyle(Th.text).lineLimit(2)
-                                Text(it.creator).font(.system(size: 11)).foregroundStyle(Th.dim).lineLimit(1)
-                            }
-                        }
-                        .buttonStyle(.plain)
-                    }
-                    if cursor != nil && !loading {
-                        Chip(label: "More") { Task { await load(more: true) } }
-                    }
+            if category == .audio {
+                AudioBrowserView(store: store, query: $query, searchTrigger: audioSearchTrigger) { item, parent in
+                    let target = parent ?? store.selection.first ?? store.model.workspace
+                    let s = store.session.insertObject("Sound", into: target)
+                    s.name = item.title.isEmpty ? item.name : item.title
+                    s.set("SoundId", .string("rbxassetid://\(item.id)"))
+                    store.showToast("Inserted \(s.name)")
                 }
-                if loading { ProgressView().padding() }
+            } else {
+                if let error { Text(error).font(.system(size: 12)).foregroundStyle(Th.error) }
+                ScrollView {
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 110), spacing: 10)], spacing: 10) {
+                        ForEach(items) { it in
+                            Button { insert(it) } label: {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    AsyncImage(url: it.thumbnail) { img in img.resizable().scaledToFit() } placeholder: { Th.hover }
+                                        .frame(maxWidth: .infinity).aspectRatio(1, contentMode: .fit)
+                                        .background(Th.card)
+                                        .clipShape(RoundedRectangle(cornerRadius: 6))
+                                    Text(it.name).font(.system(size: 12)).foregroundStyle(Th.text).lineLimit(2)
+                                    Text(it.creator).font(.system(size: 11)).foregroundStyle(Th.dim).lineLimit(1)
+                                }
+                            }
+                            .buttonStyle(.plain)
+                        }
+                        if cursor != nil && !loading {
+                            Chip(label: "More") { Task { await load(more: true) } }
+                        }
+                    }
+                    if loading { ProgressView().padding() }
+                }
             }
         }
         .padding(8)

@@ -147,4 +147,73 @@ final class StudioScriptTests: XCTestCase {
         XCTAssertNotNil(wrapped.findFirstChild("HumanoidRootPart"))
         XCTAssertNotNil(wrapped.findFirstChildOfClass("Humanoid"))
     }
+
+    func testCurveAnimDefaultAnimateAndEditAnimation() {
+        // 1. CurveAnim.decode + eval + from
+        func appendI32(_ d: inout Data, _ v: Int32) {
+            var le = v.littleEndian
+            withUnsafeBytes(of: &le) { d.append(contentsOf: $0) }
+        }
+        func appendF32(_ d: inout Data, _ v: Float) {
+            var le = v.bitPattern.littleEndian
+            withUnsafeBytes(of: &le) { d.append(contentsOf: $0) }
+        }
+        var raw = Data()
+        appendI32(&raw, 1) // header
+        appendI32(&raw, 2) // 2 keys, stride 14 (interp:1, pad:1, val:4, lt:4, rt:4)
+        raw.append(1); raw.append(0); appendF32(&raw, 0); appendF32(&raw, 0); appendF32(&raw, 0)
+        raw.append(1); raw.append(0); appendF32(&raw, 10); appendF32(&raw, 0); appendF32(&raw, 0)
+        appendI32(&raw, 1) // times header
+        appendI32(&raw, 2) // 2 times
+        appendI32(&raw, 0) // t = 0
+        appendI32(&raw, 2400) // t = 1.0s
+
+        let keys = CurveAnim.decode(raw)
+        XCTAssertEqual(keys.count, 2)
+        XCTAssertEqual(CurveAnim.eval(keys, 0.5), 5, accuracy: 0.001)
+
+        let ca = Instance("CurveAnimation")
+        let folder = Instance("Folder"); folder.name = "Head"; folder.attachRaw(ca)
+        let v3c = Instance("Vector3Curve"); v3c.attachRaw(folder)
+        let fc = Instance("FloatCurve"); fc.name = "Y"
+        fc.set("ValuesAndTimes", .binaryString(BinaryString(raw)), notify: false)
+        fc.attachRaw(v3c)
+        let clip = CurveAnim.from(ca)
+        XCTAssertNotNil(clip)
+        XCTAssertEqual(clip?.length ?? 0, 1.0, accuracy: 0.001)
+        XCTAssertEqual(clip?.sample("Head", 0.5)?.position.y ?? 0, 5, accuracy: 0.05)
+
+        // 2. DefaultAnimate tree + Disabled respect
+        let rig = CharacterBuilder.buildR15(name: "Rig15")
+        let animScript = DefaultAnimate.attach(to: rig, r15: true)
+        XCTAssertNotNil(animScript)
+        XCTAssertNotNil(DefaultAnimate.config(of: rig)?["run"])
+        animScript?.set("Disabled", .bool(true))
+        XCTAssertNil(DefaultAnimate.config(of: rig))
+
+        // 3. EditAnimation registration + Motor6D seating in edit mode
+        EditAnimation.shared.clear()
+        let dm = PlaceFactory.newPlace(.empty)
+        let r6 = CharacterBuilder.buildR6(name: "Dummy", at: .at(Vector3(0, 5, 0)))
+        r6.attachRaw(dm.workspace)
+        let host = PluginHost(model: dm)
+        host.runCommand("""
+        local ksp = game:GetService("KeyframeSequenceProvider")
+        local ks = Instance.new("KeyframeSequence")
+        local kf = Instance.new("Keyframe"); kf.Time = 0; kf.Parent = ks
+        local p = Instance.new("Pose"); p.Name = "Head"; p.CFrame = CFrame.new(0, 2, 0); p.Parent = kf
+        local id = ksp:RegisterKeyframeSequence(ks)
+        assert(string.sub(id, 1, 10) == "rbxtemp://")
+        local dummy = workspace:FindFirstChild("Dummy")
+        local hum = dummy:FindFirstChildOfClass("Humanoid")
+        local anim = Instance.new("Animation"); anim.AnimationId = id
+        local tr = hum:LoadAnimation(anim)
+        tr:Play(0)
+        """)
+        host.step(0.05)
+        let head = r6.findFirstChild("Head")!
+        let torso = r6.findFirstChild("Torso")!
+        XCTAssertGreaterThan(PartData.cframe(head).position.y, PartData.cframe(torso).position.y + 2.5)
+        EditAnimation.shared.clear()
+    }
 }

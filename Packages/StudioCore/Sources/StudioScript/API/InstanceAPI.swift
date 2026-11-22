@@ -350,6 +350,10 @@ final class InstanceAPI {
         if inst.className == "Sound", stored == "Playing" {
             if case .bool(true) = pv { rt.host?.playSound(inst) } else { rt.host?.stopSound(inst) }
         }
+        if !rt.isPlay, (inst.className == "Motor6D" || inst.className == "Motor"),
+           stored == "Transform" || stored == "C0" || stored == "C1" {
+            EditAnimation.shared.markDirty(inst)
+        }
     }
 
     func setParent(_ inst: Instance, _ p: Instance?) throws {
@@ -536,8 +540,14 @@ extension InstanceAPI {
 
     func trackNewIndex(_ c: LuaCall, _ t: AnimTrackRef, _ key: String) throws {
         switch key {
-        case "Looped": t.looped = c.bool(3); rt.host?.adjustTrack(t, speed: nil, weight: nil, looped: t.looped, time: nil)
-        case "TimePosition": let v = try c.checkFloat(3); rt.host?.adjustTrack(t, speed: nil, weight: nil, looped: nil, time: v)
+        case "Looped":
+            t.looped = c.bool(3)
+            if let h = rt.host { h.adjustTrack(t, speed: nil, weight: nil, looped: t.looped, time: nil) }
+            else { EditAnimation.shared.adjustTrack(t, speed: nil, weight: nil, looped: t.looped, time: nil) }
+        case "TimePosition":
+            let v = try c.checkFloat(3)
+            if let h = rt.host { h.adjustTrack(t, speed: nil, weight: nil, looped: nil, time: v) }
+            else { EditAnimation.shared.adjustTrack(t, speed: nil, weight: nil, looped: nil, time: v) }
         case "Priority": t.priority = c.enumItem(3)?.value ?? Int(c.number(3) ?? 2)
         default: throw LuaError("\(key) cannot be assigned to")
         }
@@ -545,13 +555,27 @@ extension InstanceAPI {
 
     func callTrack(_ c: LuaCall, _ t: AnimTrackRef, _ m: String) throws -> Int32 {
         switch m {
-        case "Play": rt.host?.playTrack(t, fade: c.optFloat(2, 0.1), weight: c.optFloat(3, 1), speed: c.optFloat(4, 1))
-        case "Stop": rt.host?.stopTrack(t, fade: c.optFloat(2, 0.1))
-        case "AdjustSpeed": t.speed = c.optFloat(2, 1); rt.host?.adjustTrack(t, speed: t.speed, weight: nil, looped: nil, time: nil)
-        case "AdjustWeight": t.weight = c.optFloat(2, 1); rt.host?.adjustTrack(t, speed: nil, weight: t.weight, looped: nil, time: nil)
+        case "Play":
+            let f = c.optFloat(2, 0.1), w = c.optFloat(3, 1), s = c.optFloat(4, 1)
+            if let h = rt.host { h.playTrack(t, fade: f, weight: w, speed: s) }
+            else { EditAnimation.shared.playTrack(t, fade: f, weight: w, speed: s) }
+        case "Stop":
+            let f = c.optFloat(2, 0.1)
+            if let h = rt.host { h.stopTrack(t, fade: f) }
+            else { EditAnimation.shared.stopTrack(t, fade: f) }
+        case "AdjustSpeed":
+            t.speed = c.optFloat(2, 1)
+            if let h = rt.host { h.adjustTrack(t, speed: t.speed, weight: nil, looped: nil, time: nil) }
+            else { EditAnimation.shared.adjustTrack(t, speed: t.speed, weight: nil, looped: nil, time: nil) }
+        case "AdjustWeight":
+            t.weight = c.optFloat(2, 1)
+            if let h = rt.host { h.adjustTrack(t, speed: nil, weight: t.weight, looped: nil, time: nil) }
+            else { EditAnimation.shared.adjustTrack(t, speed: nil, weight: t.weight, looped: nil, time: nil) }
         case "GetMarkerReachedSignal": c.push(.signal(SignalRef(owner: t, name: "Marker:" + (try c.checkString(2, m))))); return 1
         case "GetTimeOfKeyframe": c.push(0.0); return 1
-        case "Destroy": rt.host?.stopTrack(t, fade: 0)
+        case "Destroy":
+            if let h = rt.host { h.stopTrack(t, fade: 0) }
+            else { EditAnimation.shared.stopTrack(t, fade: 0) }
         case "IsA": c.push(["AnimationTrack", "Instance"].contains(try c.checkString(2, m))); return 1
         default: throw LuaError("\(m) is not a valid member of AnimationTrack")
         }

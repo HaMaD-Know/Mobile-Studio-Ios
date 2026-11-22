@@ -52,6 +52,7 @@ final class SceneRenderer: NSObject, MTKViewDelegate {
     var shadowsEnabled = true
     private var decalPipeline: MTLRenderPipelineState!
     private var terrain: TerrainRenderer?
+    private var postFx: PostFx?
     private var quadMesh: GPUMesh!
     private var depthWrite: MTLDepthStencilState!
     private var depthReadOnly: MTLDepthStencilState!
@@ -109,6 +110,7 @@ final class SceneRenderer: NSObject, MTKViewDelegate {
         overlayPipeline = try pipe("overlay_vs", "overlay_fs", blend: true, vertexDesc: vd)
         decalPipeline = try pipe("decal_vs", "decal_fs", blend: true, vertexDesc: vd)
         terrain = try? TerrainRenderer(device: device, library: lib)
+        postFx = try? PostFx(device: device, library: lib)
         let sp = MTLRenderPipelineDescriptor()
         sp.vertexFunction = lib.makeFunction(name: "shadow_vs")
         sp.vertexDescriptor = vd
@@ -361,7 +363,10 @@ final class SceneRenderer: NSObject, MTKViewDelegate {
                 se.endEncoding()
             }
         }
-        guard let enc = cmd.makeRenderCommandEncoder(descriptor: rpd) else { cmd.commit(); inflight.signal(); return }
+        postFx?.read(lighting: store.shownModel.findService("Lighting"),
+                     camera: store.shownModel.workspace.get("CurrentCamera")?.asInstance)
+        let sceneRpd = postFx?.begin(width: Int(w), height: Int(h)) ?? rpd
+        guard let enc = cmd.makeRenderCommandEncoder(descriptor: sceneRpd) else { cmd.commit(); inflight.signal(); return }
         enc.setFragmentTexture(shadowMap, index: 3)
         enc.setFragmentSamplerState(sampler, index: 0)
         enc.setVertexBuffer(buf, offset: frameOffset, index: 1)
@@ -418,6 +423,13 @@ final class SceneRenderer: NSObject, MTKViewDelegate {
             }
         }
         enc.endEncoding()
+        if postFx?.active == true {
+            let sunClip = vp * SIMD4<Float>(camCF.position.simd + lighting.sunDir * 1000, 1)
+            let sunX: Float = sunClip.w > 0 ? (sunClip.x / sunClip.w) * 0.5 + 0.5 : 0.5
+            let sunY: Float = sunClip.w > 0 ? 0.5 - (sunClip.y / sunClip.w) * 0.5 : 0.5
+            let sunVis = max(0, min(1, simd_dot(camCF.lookVector.simd, lighting.sunDir) * 1.4))
+            postFx?.finish(cmd: cmd, target: rpd, sunX: sunX, sunY: sunY, sunVisible: sunVis)
+        }
         cmd.present(drawable)
         cmd.addCompletedHandler { [inflight] _ in inflight.signal() }
         cmd.commit()

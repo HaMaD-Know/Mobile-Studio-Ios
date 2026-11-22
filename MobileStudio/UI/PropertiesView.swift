@@ -242,31 +242,33 @@ struct PropertyRow: View {
     private func set(_ v: PropValue) { store.setProp(inst, name, v) }
 }
 
-/// Swatch + "r, g, b" (0-255) editor; tapping the swatch opens the system colour picker.
+/// Swatch + "r, g, b" (0-255) editor; tapping the swatch opens the multi-mode Studio colour picker.
 struct ColorRowEditor: View {
     let color: Color3
     let commit: (Color3) -> Void
+    @State private var showPicker = false
 
     var body: some View {
         HStack(spacing: 8) {
-            ColorPicker("", selection: Binding(get: { swiftColor }, set: { apply($0) }), supportsOpacity: false)
-                .labelsHidden()
-                .frame(width: 26)
+            Button { showPicker = true } label: {
+                RoundedRectangle(cornerRadius: 3)
+                    .fill(swiftColor)
+                    .frame(width: 22, height: 22)
+                    .overlay(RoundedRectangle(cornerRadius: 3).stroke(Th.dim, lineWidth: 1))
+            }
+            .buttonStyle(.plain)
             CommitField(text: rgbText) { s in
                 let p = s.split(whereSeparator: { $0 == "," || $0 == " " }).compactMap { Float($0) }
                 if p.count == 3 { commit(Color3(p[0] / 255, p[1] / 255, p[2] / 255)) }
             }
         }
+        .sheet(isPresented: $showPicker) {
+            StudioColorPickerSheet(title: "Color", initial: color) { commit($0) }
+        }
     }
 
     private var swiftColor: Color { Color(red: Double(color.r), green: Double(color.g), blue: Double(color.b)) }
     private var rgbText: String { [color.r, color.g, color.b].map { String(Int(($0 * 255).rounded())) }.joined(separator: ", ") }
-
-    private func apply(_ c: Color) {
-        var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
-        UIColor(c).getRed(&r, green: &g, blue: &b, alpha: &a)
-        commit(Color3(Float(r), Float(g), Float(b)))
-    }
 }
 
 /// Text field that commits on return / focus loss.

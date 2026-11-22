@@ -85,6 +85,9 @@ final class StudioStore: ObservableObject, TreeListener {
         session.model.addListener(self)
         makePluginHost()
         assistant.store = self
+        EditAnimation.shared.animLib.loader = { id, done in
+            AssetCache.shared.fetch(id) { url in done(url.flatMap { try? Data(contentsOf: $0) }) }
+        }
     }
 
     // MARK: plugins & command bar
@@ -220,6 +223,7 @@ final class StudioStore: ObservableObject, TreeListener {
         openScripts = []; activeScript = nil; scriptDrafts = [:]
         session.replaceModel(dm)
         dm.addListener(self)
+        EditAnimation.shared.clear()
         cloudPlace = nil
         makePluginHost()
         fileURL = url

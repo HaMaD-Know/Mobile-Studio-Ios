@@ -278,14 +278,18 @@ enum HumanoidAPI {
         case ("Humanoid", "LoadAnimation"), ("Animator", "LoadAnimation"), ("AnimationController", "LoadAnimation"):
             let anim = try c.checkInstance(2, m)
             let owner = inst.className == "Animator" ? (inst.parent ?? inst) : inst
-            guard let t = rt.host?.loadTrack(owner: owner, animation: anim) else {
-                c.push(.track(AnimTrackRef(owner: owner, animation: anim))); return 1
+            if let t = rt.host?.loadTrack(owner: owner, animation: anim) {
+                c.push(.track(t)); return 1
             }
-            c.push(.track(t)); return 1
+            c.push(.track(EditAnimation.shared.loadTrack(owner: owner, animation: anim))); return 1
         case ("Humanoid", "GetPlayingAnimationTracks"), ("Animator", "GetPlayingAnimationTracks"), ("AnimationController", "GetPlayingAnimationTracks"):
             let owner = inst.className == "Animator" ? (inst.parent ?? inst) : inst
-            c.pushArray(rt.host?.playingTracks(owner) ?? []) { c.push(.track($0)) }; return 1
-        case ("Animator", "StepAnimations"): return 0
+            let list = rt.host?.playingTracks(owner) ?? EditAnimation.shared.playingTracks(owner)
+            c.pushArray(list) { c.push(.track($0)) }; return 1
+        case ("Animator", "StepAnimations"):
+            let owner = inst.parent ?? inst
+            if rt.host == nil { EditAnimation.shared.stepAnimations(owner: owner, dt: c.optFloat(2, 0)) }
+            return 0
         case ("Humanoid", "EquipTool"): rt.host?.equipTool(inst, try c.checkInstance(2, m)); return 0
         case ("Humanoid", "UnequipTools"): rt.host?.unequipTools(inst); return 0
         case ("Humanoid", "AddAccessory"):

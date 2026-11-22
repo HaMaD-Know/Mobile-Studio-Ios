@@ -79,6 +79,8 @@ enum Services {
         "VRService": ["GetUserCFrame", "GetUserCFrameEnabled", "RecenterUserHeadCFrame"],
         "HapticService": ["IsVibrationSupported", "IsMotorSupported", "SetMotor", "GetMotor"],
         "Stats": ["GetTotalMemoryUsageMb", "GetMemoryUsageMbForTag"],
+        "KeyframeSequenceProvider": ["RegisterKeyframeSequence", "RegisterActiveKeyframeSequence", "GetKeyframeSequenceAsync", "GetAnimationsAsync"],
+        "AnimationClipProvider": ["RegisterAnimationClip", "RegisterActiveAnimationClip", "GetAnimationClipAsync"],
     ]
 
     static func methods(_ inst: Instance) -> Set<String> {
@@ -390,6 +392,17 @@ enum Services {
         case ("VRService", _): c.push(false); return 1
         case ("HapticService", _): c.push(false); return 1
         case ("Stats", _): c.push(Double(lua_gc(c.L, 3, 0)) / 1024); return 1
+        case ("KeyframeSequenceProvider", "RegisterKeyframeSequence"), ("AnimationClipProvider", "RegisterAnimationClip"):
+            let seq = try c.checkInstance(2, m)
+            c.push(EditAnimation.shared.register(seq, active: false)); return 1
+        case ("KeyframeSequenceProvider", "RegisterActiveKeyframeSequence"), ("AnimationClipProvider", "RegisterActiveAnimationClip"):
+            let seq = try c.checkInstance(2, m)
+            c.push(EditAnimation.shared.register(seq, active: true)); return 1
+        case ("KeyframeSequenceProvider", "GetKeyframeSequenceAsync"), ("AnimationClipProvider", "GetAnimationClipAsync"):
+            let id = try c.checkString(2, m)
+            c.push(EditAnimation.shared.instance(for: id)); return 1
+        case ("KeyframeSequenceProvider", "GetAnimationsAsync"):
+            c.push(InstanceFactory.create("Folder")); return 1
         default:
             return nil
         }

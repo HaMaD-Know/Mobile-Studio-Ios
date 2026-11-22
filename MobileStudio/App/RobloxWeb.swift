@@ -155,6 +155,98 @@ enum RobloxWeb {
         return out
     }
 
+    // MARK: Audio catalog (RobloxApi.searchAudio / searchAudioLegacy)
+
+    struct AudioQuery {
+        var keyword: String = ""
+        var type: String? = nil          // nil, "Music", "SoundEffect"
+        var sort: String = "Relevance"   // Relevance, Trending, Top, UpdatedTime, AudioDuration
+        var minSeconds: Int = 0
+        var maxSeconds: Int? = nil
+        var chart: String = "None"       // None, Current, Week, Month, Year
+        var artist: String = ""
+    }
+
+    struct AudioItem: Identifiable {
+        let id: Int64
+        let name: String
+        let artist: String
+        let title: String
+        let seconds: Int
+        let type: String
+        let creator: String
+        let verified: Bool
+        let album: String
+    }
+
+    struct AudioPage {
+        let items: [AudioItem]
+        let nextToken: String?
+    }
+
+    static func searchAudio(_ q: AudioQuery, pageToken: String? = nil, pageSize: Int = 30) async throws -> AudioPage {
+        func enc(_ s: String) -> String { s.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? s }
+        var url = "https://apis.roblox.com/toolbox-service/v2/assets:search?searchCategoryType=Audio&maxPageSize=\(pageSize)&includeOnlyVerifiedCreators=false"
+        let kw = q.keyword.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !kw.isEmpty { url += "&query=" + enc(kw) }
+        if let t = q.type { url += "&audioTypes=" + enc(t) }
+        if q.sort != "Relevance" {
+            let dir = q.sort == "AudioDuration" ? "Ascending" : "Descending"
+            url += "&sortCategory=\(enc(q.sort))&sortDirection=\(dir)"
+        }
+        if q.minSeconds > 0 { url += "&audioMinDurationSeconds=\(q.minSeconds)" }
+        if let mx = q.maxSeconds { url += "&audioMaxDurationSeconds=\(mx)" }
+        if q.chart != "None" { url += "&musicChartType=\(enc(q.chart))&includeTopCharts=true" }
+        let art = q.artist.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !art.isEmpty { url += "&audioArtist=" + enc(art) }
+        if let tok = pageToken { url += "&pageToken=" + enc(tok) }
+
+        var headers: [String: String] = [:]
+        if let c = AccountStore.shared.cookie, !c.isEmpty { headers["Cookie"] = ".ROBLOSECURITY=" + c }
+        let (data, resp) = try await request(url, headers: headers)
+        guard (200..<300).contains(resp.statusCode) else { throw WebError(message: "HTTP \(resp.statusCode)") }
+        let j = (try JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:]
+        let arr = (j["creatorStoreAssets"] as? [[String: Any]])
+            ?? (j["assets"] as? [[String: Any]])
+            ?? (j["data"] as? [[String: Any]])
+            ?? []
+        var out: [AudioItem] = []
+        for entry in arr {
+            let asset = (entry["asset"] as? [String: Any]) ?? entry
+            guard let id = (asset["id"] as? NSNumber)?.int64Value, id != 0 else { continue }
+            let details = (asset["audioDetails"] as? [String: Any])
+                ?? (asset["audio"] as? [String: Any])
+                ?? asset
+            let creatorObj = (entry["creator"] as? [String: Any]) ?? (asset["creator"] as? [String: Any])
+            let seconds = (details["durationSeconds"] as? NSNumber)?.intValue
+                ?? (details["duration"] as? NSNumber)?.intValue
+                ?? (asset["durationSeconds"] as? NSNumber)?.intValue ?? 0
+            let type = (details["audioType"] as? String)
+                ?? (asset["audioType"] as? String)
+                ?? (asset["assetSubType"] as? String) ?? ""
+            let name = asset["name"] as? String ?? "Audio \(id)"
+            let artist = (details["artist"] as? String) ?? (asset["artist"] as? String) ?? ""
+            let title = (details["title"] as? String) ?? (asset["title"] as? String) ?? ""
+            let creator = creatorObj?["name"] as? String ?? ""
+            let verified = (creatorObj?["verified"] as? Bool == true) || (creatorObj?["isVerifiedCreator"] as? Bool == true)
+            let album = (details["album"] as? String) ?? (asset["album"] as? String) ?? ""
+            out.append(AudioItem(id: id, name: name, artist: artist, title: title, seconds: seconds,
+                                 type: type, creator: creator, verified: verified, album: album))
+        }
+        let rawTok = j["nextPageToken"] as? String
+        let next = rawTok.flatMap { $0.isEmpty || $0 == "null" ? nil : $0 }
+        return AudioPage(items: out, nextToken: next)
+    }
+
+    static func searchAudioLegacy(_ keyword: String, cursor: String? = nil) async throws -> AudioPage {
+        let (items, next) = try await search(keyword, .audio, cursor: cursor)
+        let mapped = items.map {
+            AudioItem(id: $0.id, name: $0.name, artist: $0.creator, title: $0.name,
+                      seconds: 0, type: "", creator: $0.creator, verified: false, album: "")
+        }
+        return AudioPage(items: mapped, nextToken: next)
+    }
+
     // MARK: experiences & places
 
     struct Game: Identifiable { let id: Int64; let name: String; let rootPlaceId: Int64 }

@@ -69,6 +69,13 @@ public final class AnimClip {
         return AnimClip(length: length, looped: seq.get("Loop")?.asBool ?? false, priority: Int(seq.get("Priority")?.asEnum ?? 0),
                         joints: lists.mapValues { $0.sorted { $0.t < $1.t } })
     }
+    public static func fromInstance(_ inst: Instance) -> AnimClip? {
+        switch inst.className {
+        case "KeyframeSequence": return from(inst)
+        case "CurveAnimation": return CurveAnim.from(inst)
+        default: return nil
+        }
+    }
 }
 
 /// Loads animation assets once and caches the clips (port of engine/AnimLibrary.kt).
@@ -77,7 +84,9 @@ public final class AnimLibrary {
     private var failed = Set<Int64>()
     private var pending = Set<Int64>()
     /// Asset loader provided by the app: content id -> file bytes (async).
-    var loader: ((String, @escaping (Data?) -> Void) -> Void)?
+    public var loader: ((String, @escaping (Data?) -> Void) -> Void)?
+
+    public init() {}
 
     static func assetId(_ s: String) -> Int64? {
         if s.hasPrefix("rbxassetid://") { return Int64(s.dropFirst(13).prefix { $0.isNumber }) }
@@ -86,6 +95,9 @@ public final class AnimLibrary {
     }
 
     func clip(_ content: String) -> AnimClip? {
+        if content.hasPrefix("rbxtemp://") || content.hasPrefix("active://") {
+            return EditAnimation.shared.clip(for: content)
+        }
         guard let id = AnimLibrary.assetId(content) else { return nil }
         if let c = clips[id] { return c }
         guard !failed.contains(id), !pending.contains(id), let loader else { return nil }
@@ -94,14 +106,17 @@ public final class AnimLibrary {
             guard let self else { return }
             self.pending.remove(id)
             guard let data, let doc = try? RbxFile.read(data),
-                  let seq = doc.roots.flatMap({ [$0] + $0.descendants() }).first(where: { $0.className == "KeyframeSequence" }),
-                  let clip = AnimClip.from(seq) else { self.failed.insert(id); return }
+                  let seq = doc.roots.flatMap({ [$0] + $0.descendants() }).first(where: { $0.className == "KeyframeSequence" || $0.className == "CurveAnimation" }),
+                  let clip = AnimClip.fromInstance(seq) else { self.failed.insert(id); return }
             self.clips[id] = clip
         }
         return nil
     }
 
-    func failed(_ content: String) -> Bool { AnimLibrary.assetId(content).map { failed.contains($0) } ?? true }
+    func failed(_ content: String) -> Bool {
+        if content.hasPrefix("rbxtemp://") || content.hasPrefix("active://") { return EditAnimation.shared.clip(for: content) == nil }
+        return AnimLibrary.assetId(content).map { failed.contains($0) } ?? true
+    }
 }
 
 /// Blends playing clips into joint transforms (port of engine/AnimPlayer.kt).
@@ -173,16 +188,121 @@ final class AnimPlayer {
     func clear() { tracks.removeAll() }
 }
 
-/// Roblox's default character animations (port of engine/DefaultAnimate.kt).
+/// Roblox's default character animations & builtin `Animate` LocalScript tree
+/// (port of engine/DefaultAnimate.kt).
+public enum DefaultAnimate {
+    public struct Entry { public let id: String; public let weight: Float }
+
+    public static let emoteNames: [(title: String, key: String)] = [
+        ("Wave", "wave"), ("Point", "point"), ("Cheer", "cheer"), ("Laugh", "laugh"),
+        ("Dance", "dance"), ("Dance 2", "dance2"), ("Dance 3", "dance3"),
+    ]
+    public static let loopingEmotes: Set<String> = ["dance", "dance2", "dance3"]
+
+    static let r15Tree: [String: [(String, Int64, Float)]] = [
+        "idle": [("Animation1", 507766666, 9), ("Animation2", 507766951, 1)],
+        "walk": [("WalkAnim", 507777826, 10)],
+        "run": [("RunAnim", 507767714, 10)],
+        "jump": [("JumpAnim", 507765000, 10)],
+        "fall": [("FallAnim", 507767968, 10)],
+        "climb": [("ClimbAnim", 507765644, 10)],
+        "swim": [("Swim", 507784897, 10)],
+        "swimidle": [("SwimIdle", 507785072, 10)],
+        "sit": [("SitAnim", 2506281703, 10)],
+        "toolnone": [("ToolNoneAnim", 507768375, 10)],
+        "wave": [("WaveAnim", 507770239, 10)],
+        "point": [("PointAnim", 507770453, 10)],
+        "dance": [("Animation1", 507771019, 10), ("Animation2", 507771955, 10), ("Animation3", 507772104, 10)],
+        "dance2": [("Animation1", 507776043, 10), ("Animation2", 507776720, 10), ("Animation3", 507776879, 10)],
+        "dance3": [("Animation1", 507777268, 10), ("Animation2", 507777451, 10), ("Animation3", 507777623, 10)],
+        "laugh": [("LaughAnim", 507770818, 10)],
+        "cheer": [("CheerAnim", 507770677, 10)],
+    ]
+
+    static let r6Tree: [String: [(String, Int64, Float)]] = [
+        "idle": [("Animation1", 180435571, 9), ("Animation2", 180435792, 1)],
+        "walk": [("WalkAnim", 180426354, 10)],
+        "run": [("RunAnim", 180426354, 10)],
+        "jump": [("JumpAnim", 125750702, 10)],
+        "fall": [("FallAnim", 180436148, 10)],
+        "climb": [("ClimbAnim", 180436334, 10)],
+        "sit": [("SitAnim", 178130996, 10)],
+        "toolnone": [("ToolNoneAnim", 182393478, 10)],
+        "wave": [("WaveAnim", 128777973, 10)],
+        "point": [("PointAnim", 128853357, 10)],
+        "dance": [("Animation1", 182435998, 10), ("Animation2", 182491037, 10), ("Animation3", 182491065, 10)],
+        "dance2": [("Animation1", 182436842, 10), ("Animation2", 182491248, 10), ("Animation3", 182491277, 10)],
+        "dance3": [("Animation1", 182436935, 10), ("Animation2", 182491368, 10), ("Animation3", 182491423, 10)],
+        "laugh": [("LaughAnim", 129423131, 10)],
+        "cheer": [("CheerAnim", 129423030, 10)],
+    ]
+
+    /// Attaches Roblox's default `Animate` LocalScript + StringValue/Animation config tree to `char`
+    /// unless the place already supplied an `Animate` child (e.g. via StarterCharacterScripts).
+    @discardableResult
+    public static func attach(to char: Instance, r15: Bool) -> Instance? {
+        if char.findFirstChild("Animate") != nil { return nil }
+        let script = InstanceFactory.create("LocalScript")
+        script.name = "Animate"
+        script.archivable = false
+        script.attributes["__builtinAnimate"] = .bool(true)
+        script.set("Source", .string("-- Default character animations (managed by Mobile Studio)\n"), notify: false)
+        let tree = r15 ? r15Tree : r6Tree
+        for (pose, list) in tree {
+            let sv = InstanceFactory.create("StringValue")
+            sv.name = pose
+            sv.attachRaw(script)
+            for (animName, id, weight) in list {
+                let a = InstanceFactory.create("Animation")
+                a.name = animName
+                a.set("AnimationId", .string("rbxassetid://\(id)"), notify: false)
+                a.attachRaw(sv)
+                let w = InstanceFactory.create("NumberValue")
+                w.name = "Weight"
+                w.set("Value", .double(Double(weight)), notify: false)
+                w.attachRaw(a)
+            }
+        }
+        script.attachRaw(char)
+        return script
+    }
+
+    /// Reads the character's builtin `Animate` config; returns `nil` when `Animate` was removed,
+    /// disabled, or replaced with a user script.
+    public static func config(of char: Instance) -> [String: [Entry]]? {
+        guard let script = char.findFirstChild("Animate"),
+              script.attributes["__builtinAnimate"]?.asBool == true,
+              script.get("Disabled")?.asBool != true else { return nil }
+        var out: [String: [Entry]] = [:]
+        for child in script.children where child.className == "StringValue" {
+            var entries: [Entry] = []
+            for a in child.children where a.className == "Animation" {
+                let id = a.get("AnimationId")?.description ?? ""
+                guard !id.isEmpty else { continue }
+                let w = a.findFirstChild("Weight")?.get("Value")?.asFloat ?? 10
+                entries.append(Entry(id: id, weight: max(0.01, w)))
+            }
+            if !entries.isEmpty { out[child.name] = entries }
+        }
+        return out
+    }
+
+    /// Weighted random choice among entries for a pose.
+    public static func pick(_ entries: [Entry]?) -> String? {
+        guard let entries, !entries.isEmpty else { return nil }
+        if entries.count == 1 { return entries[0].id }
+        let total = entries.reduce(Float(0)) { $0 + $1.weight }
+        var r = Float.random(in: 0..<max(total, 0.001))
+        for e in entries {
+            r -= e.weight
+            if r <= 0 { return e.id }
+        }
+        return entries.last?.id
+    }
+}
+
+/// Legacy alias kept for tests/callers.
 enum DefaultAnimations {
-    static let r15: [String: [Int64]] = [
-        "idle": [507766666, 507766951], "walk": [913402848], "run": [913376220], "jump": [507765000], "fall": [507767968],
-        "climb": [507765644], "sit": [2506281703], "toolnone": [507768375], "wave": [507770239], "point": [507770453],
-        "dance": [507771019, 507771955, 507772104], "laugh": [507770818], "cheer": [507770677],
-    ]
-    static let r6: [String: [Int64]] = [
-        "idle": [180435571, 180435792], "walk": [180426354], "run": [180426354], "jump": [125750702], "fall": [180436148],
-        "climb": [180436334], "sit": [178130996], "toolnone": [182393478], "wave": [128777973], "point": [128853357],
-        "dance": [182435998, 182491037, 182491065], "laugh": [129423131], "cheer": [129423030],
-    ]
+    static let r15: [String: [Int64]] = DefaultAnimate.r15Tree.mapValues { $0.map(\.1) }
+    static let r6: [String: [Int64]] = DefaultAnimate.r6Tree.mapValues { $0.map(\.1) }
 }

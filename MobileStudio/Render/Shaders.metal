@@ -386,3 +386,78 @@ fragment float4 water_fs(WOut in [[stage_in]], constant Frame& f [[buffer(1)]], 
 vertex float4 terrain_shadow_vs(TIn in [[stage_in]], constant Frame& f [[buffer(1)]]) {
     return f.shadowVP * float4(in.pos, 1.0);
 }
+
+// MARK: post-processing (render/PostFx.kt: Bloom, Blur, SunRays, ColorCorrection)
+
+struct PostFxUniforms {
+    float4 params; // x: threshold (bright) / bloom (comp), y: blur (comp), zw: blur dir
+    float4 cc;     // xyz: brightness, contrast, saturation
+    float4 tint;   // rgb: tint
+    float4 rays;   // xy: sunUV, z: intensity, w: spread
+};
+
+struct PostOut { float4 position [[position]]; float2 uv; };
+
+vertex PostOut postfx_vs(uint vid [[vertex_id]]) {
+    float2 pts[3] = { float2(-1, -1), float2(3, -1), float2(-1, 3) };
+    PostOut o;
+    o.position = float4(pts[vid], 0.0, 1.0);
+    o.uv = float2(pts[vid].x * 0.5 + 0.5, 0.5 - pts[vid].y * 0.5);
+    return o;
+}
+
+fragment float4 postfx_bright_fs(PostOut in [[stage_in]],
+                                 texture2d<float> tex [[texture(0)]],
+                                 sampler smp [[sampler(0)]],
+                                 constant PostFxUniforms& u [[buffer(0)]]) {
+    float3 c = tex.sample(smp, in.uv).rgb;
+    float thresh = u.params.x;
+    if (thresh < 0.0) return float4(c, 1.0);
+    float l = mix(dot(c, float3(0.299, 0.587, 0.114)), max(c.r, max(c.g, c.b)), 0.5);
+    float k = smoothstep(thresh, thresh + 0.25, l);
+    return float4(c * k, 1.0);
+}
+
+fragment float4 postfx_blur_fs(PostOut in [[stage_in]],
+                               texture2d<float> tex [[texture(0)]],
+                               sampler smp [[sampler(0)]],
+                               constant PostFxUniforms& u [[buffer(0)]]) {
+    float2 dir = u.params.zw;
+    float3 c = tex.sample(smp, in.uv).rgb * 0.227;
+    c += tex.sample(smp, in.uv + dir * 1.385).rgb * 0.316;
+    c += tex.sample(smp, in.uv - dir * 1.385).rgb * 0.316;
+    c += tex.sample(smp, in.uv + dir * 3.231).rgb * 0.070;
+    c += tex.sample(smp, in.uv - dir * 3.231).rgb * 0.070;
+    return float4(c, 1.0);
+}
+
+fragment float4 postfx_comp_fs(PostOut in [[stage_in]],
+                               texture2d<float> sceneTex [[texture(0)]],
+                               texture2d<float> brightTex [[texture(1)]],
+                               sampler smp [[sampler(0)]],
+                               constant PostFxUniforms& u [[buffer(0)]]) {
+    float3 c = sceneTex.sample(smp, in.uv).rgb;
+    float3 soft = brightTex.sample(smp, in.uv).rgb;
+    float bloom = u.params.x;
+    float blur = u.params.y;
+    if (blur > 0.0) c = mix(c, soft, blur);
+    else if (bloom > 0.0) c = 1.0 - (1.0 - c) * (1.0 - clamp(soft * bloom * 0.6, 0.0, 1.0));
+    if (u.rays.z > 0.001) {
+        float2 d = (u.rays.xy - in.uv) * (u.rays.w / 16.0);
+        float2 p = in.uv;
+        float decay = 1.0;
+        float3 acc = float3(0.0);
+        for (int i = 0; i < 16; i++) {
+            p += d;
+            acc += brightTex.sample(smp, p).rgb * decay;
+            decay *= 0.9;
+        }
+        c += acc * (u.rays.z / 16.0);
+    }
+    c += u.cc.x;
+    c = (c - 0.5) * (1.0 + u.cc.y) + 0.5;
+    float l = dot(c, float3(0.299, 0.587, 0.114));
+    c = mix(float3(l), c, 1.0 + u.cc.z);
+    c *= u.tint.rgb;
+    return float4(clamp(c, 0.0, 1.0), 1.0);
+}
