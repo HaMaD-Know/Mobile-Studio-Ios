@@ -135,9 +135,13 @@ public enum Csg {
             guard let plane else { return polys }
             var f: [Polygon] = []
             var b: [Polygon] = []
+            var cf: [Polygon] = []
+            var cb: [Polygon] = []
             for p in polys {
-                plane.split(p, coplanarFront: &f, coplanarBack: &b, front: &f, back: &b)
+                plane.split(p, coplanarFront: &cf, coplanarBack: &cb, front: &f, back: &b)
             }
+            if !cf.isEmpty { f.append(contentsOf: cf) }
+            if !cb.isEmpty { b.append(contentsOf: cb) }
             var out = front?.clipPolygons(f) ?? f
             if let back {
                 out.append(contentsOf: back.clipPolygons(b))

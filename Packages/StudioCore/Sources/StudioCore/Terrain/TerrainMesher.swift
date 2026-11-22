@@ -89,7 +89,7 @@ public enum TerrainMesher {
             let (pos, nrm, vid) = vertices(solidD, ox, oy, oz)
             var colors32 = [SIMD4<Float>](repeating: .zero, count: pos.count / 3)
             for j in 0..<C { for k in 0..<C { for i in 0..<C {
-                let v = vid[ci(i, j, k)]
+                let v = Int(vid[ci(i, j, k)])
                 guard v >= 0 else { continue }
                 var best: Float = -1, bm = 2
                 for (dx, dy, dz) in corners {
