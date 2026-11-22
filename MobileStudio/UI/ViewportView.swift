@@ -53,6 +53,7 @@ struct ViewportView: UIViewRepresentable {
         weak var view: MTKView?
         private var dragging = false
         private var boxStart: CGPoint?
+        private var painting = false
         private var lastPinch: CGFloat = 1
 
         init(store: StudioStore) { self.store = store }
@@ -64,6 +65,11 @@ struct ViewportView: UIViewRepresentable {
             let p = g.location(in: view)
             MainActor.assumeIsolated {
                 if let play = store.play { play.tap(x: Float(p.x), y: Float(p.y)); return }
+                if store.terrainEditor.tool != nil {
+                    store.terrainStroke(.began, at: p)
+                    store.terrainStroke(.ended, at: p)
+                    return
+                }
                 if store.handle(at: p) != nil { return }
                 store.tap(at: p, additive: store.multiSelect)
             }
@@ -93,7 +99,13 @@ struct ViewportView: UIViewRepresentable {
                     // Start where the finger first touched, not where the pan was recognised.
                     let start = CGPoint(x: p.x - g.translation(in: view).x, y: p.y - g.translation(in: view).y)
                     boxStart = nil
-                    if let h = store.handle(at: start) {
+                    painting = false
+                    if store.terrainEditor.tool != nil {
+                        painting = true
+                        dragging = false
+                        store.terrainStroke(.began, at: start)
+                        store.terrainStroke(.moved, at: p)
+                    } else if let h = store.handle(at: start) {
                         dragging = true
                         store.beginDrag(h, at: start)
                         store.updateDrag(at: p)
@@ -105,7 +117,9 @@ struct ViewportView: UIViewRepresentable {
                         dragging = false
                     }
                 case .changed:
-                    if let b = boxStart {
+                    if painting {
+                        store.terrainStroke(.moved, at: p)
+                    } else if let b = boxStart {
                         BoxSelectState.shared.rect = CGRect(x: min(b.x, p.x), y: min(b.y, p.y), width: abs(p.x - b.x), height: abs(p.y - b.y))
                     } else if dragging {
                         store.updateDrag(at: p)
@@ -115,6 +129,7 @@ struct ViewportView: UIViewRepresentable {
                         g.setTranslation(.zero, in: view)
                     }
                 default:
+                    if painting { store.terrainStroke(.ended, at: p); painting = false }
                     if boxStart != nil, let r = BoxSelectState.shared.rect {
                         store.selectInBox(r, additive: store.multiSelect)
                     }

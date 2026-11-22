@@ -473,6 +473,7 @@ extension InstanceAPI {
         case "GetStyled": c.push(getValue(inst, try c.checkString(2, m))); return 1
         default: break
         }
+        if let n = try TerrainAPI.call(c, inst, m) { return n }
         if let n = try PhysicalAPI.call(c, inst, m, self) { return n }
         if let n = try HumanoidAPI.call(c, inst, m, self) { return n }
         if let n = try MiscAPI.call(c, inst, m, self) { return n }
@@ -580,6 +581,7 @@ enum Methods {
                      "ApplyDescription", "GetAppliedDescription", "BuildRigFromAttachments", "GetLimb", "ReplaceBodyPartR15", "GetBodyPartR15",
                      "GetMoveVelocity"],
         "Animator": ["LoadAnimation", "GetPlayingAnimationTracks", "StepAnimations"],
+        "Terrain": TerrainAPI.methods,
         "AnimationController": ["LoadAnimation", "GetPlayingAnimationTracks"],
         "WorldRoot": ["Raycast", "Blockcast", "Spherecast", "Shapecast", "GetPartBoundsInBox", "GetPartBoundsInRadius", "GetPartsInPart",
                       "FindPartOnRay", "FindPartOnRayWithIgnoreList", "FindPartOnRayWithWhitelist", "FindPartsInRegion3",

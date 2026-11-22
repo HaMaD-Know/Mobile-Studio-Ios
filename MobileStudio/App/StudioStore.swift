@@ -22,6 +22,8 @@ final class StudioStore: ObservableObject, TreeListener {
 
     let session: EditSession
     let camera = FlyCamera()
+    let terrainEditor = TerrainEditor()
+    let assistant = Assistant()
 
     @Published var tool: Tool = .move
     @Published var treeVersion = 0
@@ -82,6 +84,7 @@ final class StudioStore: ObservableObject, TreeListener {
         session.onDirtyChanged = { [weak self] in self?.dirty = self?.session.dirty ?? false }
         session.model.addListener(self)
         makePluginHost()
+        assistant.store = self
     }
 
     // MARK: plugins & command bar
@@ -158,7 +161,11 @@ final class StudioStore: ObservableObject, TreeListener {
         DispatchQueue.main.async { self.pendingProps = false; self.propsVersion += 1 }
     }
 
+    /// Collects Output lines while the AI Assistant runs code (run_luau).
+    var outputCapture: [String]?
+
     func log(_ s: String, _ kind: OutputLine.Kind = .info) {
+        if kind != .info { outputCapture?.append((kind == .error ? "Error: " : kind == .warn ? "Warning: " : "") + s) }
         output.append(OutputLine(text: s, kind: kind))
         if output.count > 500 { output.removeFirst(output.count - 500) }
     }
@@ -198,6 +205,16 @@ final class StudioStore: ObservableObject, TreeListener {
         }
     }
 
+    /// Puts back a snapshot of the place (AI Assistant "Undo AI changes"), keeping the file it came from.
+    func restoreSnapshot(_ data: Data) throws {
+        let doc = try RbxFile.read(data)
+        let url = fileURL, name = fileName, xml = fileIsXml, cloud = cloudPlace, cam = camera.cframe()
+        replace(PlaceFactory.fromDocument(doc), url: url, name: name, xml: xml)
+        cloudPlace = cloud
+        camera.setFrom(cam)
+        dirty = true
+    }
+
     private func replace(_ dm: DataModel, url: URL?, name: String, xml: Bool) {
         session.model.removeListener(self)
         openScripts = []; activeScript = nil; scriptDrafts = [:]
@@ -234,6 +251,7 @@ final class StudioStore: ObservableObject, TreeListener {
     /// sources are saved as binary .rbxl.
     func placeData() -> Data {
         commitScripts()
+        if let t = TerrainStore.terrainOf(model) { TerrainStore.flush(t) }
         if let cam = model.workspace.get("CurrentCamera")?.asInstance { cam.set("CFrame", .cframe(camera.cframe()), notify: false) }
         return session.serializePlace()
     }
@@ -437,8 +455,11 @@ final class StudioStore: ObservableObject, TreeListener {
 
     func tap(at p: CGPoint, additive: Bool) {
         let (o, d) = ray(at: p)
-        guard let hit = Picking.cast(renderParts(), origin: o, dir: d) else {
-            if !additive { session.select([]) }
+        let th = terrainHit(at: p)
+        guard let hit = Picking.cast(renderParts(), origin: o, dir: d), hit.distance <= (th?.t ?? .greatestFiniteMagnitude) else {
+            if th != nil, let t = terrainInstance(create: false) {
+                if additive { session.toggleSelect(t) } else { session.select([t]) }
+            } else if !additive { session.select([]) }
             return
         }
         let target = Picking.selectable(for: hit.part, workspace: model.workspace, insideModels: selectInsideModels)
@@ -454,10 +475,12 @@ final class StudioStore: ObservableObject, TreeListener {
     /// Point in front of the camera where new parts land (on whatever the screen centre looks at).
     func spawnPoint() -> Vector3 {
         let (o, d) = ray(at: CGPoint(x: viewSize.width / 2, y: viewSize.height / 2))
-        if let h = Picking.cast(renderParts(), origin: o, dir: d, skipLocked: false), h.distance < 200 {
+        let th = TerrainStore.terrainOf(model).flatMap { TerrainMesher.raycast(TerrainStore.of($0), origin: o, dir: d, maxDist: 200) }
+        if let h = Picking.cast(renderParts(), origin: o, dir: d, skipLocked: false), h.distance < min(200, th?.t ?? 200) {
             let p = h.point
             return Vector3(snap(p.x), p.y, snap(p.z))
         }
+        if let th { return Vector3(snap(th.point.x), th.point.y, snap(th.point.z)) }
         let p = o + d * 20
         return Vector3(snap(p.x), max(0, p.y), snap(p.z))
     }
@@ -649,7 +672,7 @@ final class StudioStore: ObservableObject, TreeListener {
 
     func overlays() -> [SceneRenderer.Overlay] {
         if play != nil { return [] }
-        var out: [SceneRenderer.Overlay] = []
+        var out: [SceneRenderer.Overlay] = terrainOverlay()
         let parts = session.selectedParts()
         let blue = SIMD4<Float>(0.05, 0.62, 1, 1)
         for p in parts.prefix(200) {

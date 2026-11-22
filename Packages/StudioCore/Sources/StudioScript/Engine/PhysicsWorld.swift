@@ -34,6 +34,9 @@ final class PhysicsWorld {
     private var gridOf: [ObjectIdentifier: [Int64]] = [:]
     private let cell: Float = 8
     private var characterParts = Set<ObjectIdentifier>()
+    /// Workspace.Terrain and its voxels (collides with characters and raycasts).
+    private(set) var terrain: Instance?
+    private var terrainGrid: TerrainGrid?
 
     func part(_ id: ObjectIdentifier) -> Instance? { partsById[id] }
     func body(of p: Instance) -> Body? { bodyOf[ObjectIdentifier(p)] }
@@ -45,6 +48,8 @@ final class PhysicsWorld {
         bodies.removeAll(); bodyOf.removeAll(); joints.removeAll(); solveOrder.removeAll(); partsById.removeAll(); grid.removeAll(); gridOf.removeAll()
         characterParts = Set(character?.descendants().filter { $0.isA("BasePart") }.map(ObjectIdentifier.init) ?? [])
         let parts = ws.descendants().filter { $0.isA("BasePart") && $0.className != "Terrain" }
+        terrain = ws.findFirstChildOfClass("Terrain")
+        terrainGrid = terrain.flatMap { TerrainStore.hasVoxels($0) ? TerrainStore.of($0) : nil }
         for p in parts { partsById[ObjectIdentifier(p)] = p; insertGrid(p) }
 
         // Joints and union-find of connected parts.
@@ -239,6 +244,14 @@ final class PhysicsWorld {
                     Geometry.obbOverlap(.at(p + centerOffset), half, PartData.cframe($0), PartData.size($0) * 0.5)
             }
         }
+        let grid = terrainGrid
+        func terrainBlocked(_ p: Vector3) -> Bool {
+            guard let grid else { return false }
+            let c = p + centerOffset
+            for dy: Float in [-1.6, 0, 1.6] where TerrainMesher.density(grid, c + Vector3(0, dy, 0)) >= 0.5 { return true }
+            return false
+        }
+        func blocked(_ p: Vector3) -> Bool { terrainBlocked(p) || !blockers(p).isEmpty }
         var p = pos
         // Horizontal, with up to 2 studs of step-up.
         let horiz = Vector3(velocity.x, 0, velocity.z) * dt
@@ -247,15 +260,15 @@ final class PhysicsWorld {
             let inc = horiz / Float(steps)
             for _ in 0..<steps {
                 var cand = p + inc
-                if !blockers(cand).isEmpty {
+                if blocked(cand) {
                     var stepped = false
-                    for up in stride(from: Float(0.5), through: 2.1, by: 0.5) where blockers(cand + Vector3(0, up, 0)).isEmpty {
+                    for up in stride(from: Float(0.5), through: 2.1, by: 0.5) where !blocked(cand + Vector3(0, up, 0)) {
                         cand += Vector3(0, up, 0); stepped = true; break
                     }
                     if !stepped {
                         // Slide along the axis that isn't blocked.
                         let cx = p + Vector3(inc.x, 0, 0), cz = p + Vector3(0, 0, inc.z)
-                        if blockers(cx).isEmpty { cand = cx } else if blockers(cz).isEmpty { cand = cz } else { break }
+                        if !blocked(cx) { cand = cx } else if !blocked(cz) { cand = cz } else { break }
                     }
                 }
                 p = cand
@@ -267,7 +280,7 @@ final class PhysicsWorld {
         let dy = velocity.y * dt
         if dy > 0 {
             let cand = p + Vector3(0, dy, 0)
-            if blockers(cand).isEmpty { p = cand }
+            if !blocked(cand) { p = cand }
         }
         // Ground probe: rays down from the root's footprint.
         let probe: Float = 3.05 + max(0, -dy)
@@ -278,13 +291,17 @@ final class PhysicsWorld {
                 if d < (best?.0 ?? .greatestFiniteMagnitude) { best = (d, h.part) }
             }
         }
+        if let grid, let terrain, let h = TerrainMesher.raycast(grid, origin: p + Vector3(0, 1, 0), dir: Vector3(0, -1, 0), maxDist: probe + 1),
+           h.t - 1 < (best?.0 ?? .greatestFiniteMagnitude) {
+            best = (max(0, h.t - 1), terrain)
+        }
         if let (d, part) = best, velocity.y <= 0 {
             p.y = p.y - d + 3
             grounded = true
             groundPart = part
         } else if dy < 0 {
             let cand = p + Vector3(0, dy, 0)
-            if blockers(cand).isEmpty { p = cand } else { grounded = true }
+            if !blocked(cand) { p = cand } else { grounded = true }
         }
         return (p, grounded, groundPart)
     }
@@ -294,9 +311,16 @@ final class PhysicsWorld {
     func raycastAll(origin: Vector3, direction: Vector3, ignore: Instance?, accept: (Instance) -> Bool = { _ in true }) -> Geometry.Hit? {
         let end = origin + direction
         let candidates = query((origin.min(end), origin.max(end)))
-        return Geometry.raycast(candidates, origin: origin, direction: direction) { p in
+        let hit = Geometry.raycast(candidates, origin: origin, direction: direction) { p in
             (ignore == nil || !p.isDescendant(of: ignore!)) && PartData.transparency(p) < 1.0001 && accept(p)
         }
+        let len = direction.magnitude
+        if let grid = terrainGrid, let terrain, len > 0, accept(terrain),
+           let th = TerrainMesher.raycast(grid, origin: origin, dir: direction / len, maxDist: len),
+           th.t / len < (hit?.t ?? .greatestFiniteMagnitude) {
+            return Geometry.Hit(part: terrain, t: th.t / len, point: th.point, normal: th.normal)
+        }
+        return hit
     }
 
     func raycastStatic(origin: Vector3, direction: Vector3) -> Geometry.Hit? {

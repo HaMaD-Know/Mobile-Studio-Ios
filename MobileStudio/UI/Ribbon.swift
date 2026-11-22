@@ -56,6 +56,12 @@ struct RibbonView: View {
             RibbonButton(icon: "plus.square.fill", tint: Th.play, label: "Object…") { modal = .insertObject }
             RibbonButton(icon: "briefcase.fill", tint: Th.error, label: "Toolbox", selected: dock.toolbox) { dock.toolbox.toggle() }
         }
+        RibbonGroup(caption: "Terrain") {
+            RibbonButton(icon: "mountain.2.fill", tint: Th.play, label: "Editor", selected: dock.terrain) { dock.terrain.toggle() }
+        }
+        RibbonGroup(caption: "AI") {
+            RibbonButton(icon: "sparkles", tint: Color(argb: -6596097), label: "Assistant", selected: dock.assistant) { dock.assistant.toggle() }
+        }
         RibbonGroup(caption: "Edit") { editButtons }
         RibbonGroup(caption: "Test") { playButtons(here: false) }
     }
@@ -267,6 +273,8 @@ struct RibbonView: View {
             RibbonButton(icon: "list.bullet.rectangle", tint: Th.info, label: "Properties", selected: dock.properties) { dock.properties.toggle() }
             RibbonButton(icon: "briefcase.fill", tint: Th.error, label: "Toolbox", selected: dock.toolbox) { dock.toolbox.toggle() }
             RibbonButton(icon: "text.alignleft", tint: Th.warn, label: "Output", selected: dock.output) { dock.output.toggle() }
+            RibbonButton(icon: "mountain.2.fill", tint: Th.play, label: "Terrain", selected: dock.terrain) { dock.terrain.toggle() }
+            RibbonButton(icon: "sparkles", tint: Color(argb: -6596097), label: "Assistant", selected: dock.assistant) { dock.assistant.toggle() }
             RibbonButton(icon: "viewfinder", tint: Th.info, label: "Hide All") { dock.toggleHideAll() }
             RibbonButton(icon: "rectangle.split.2x1", tint: Th.text, label: "Reset Layout") { dock.resetLayout() }
         }

@@ -299,3 +299,90 @@ fragment float4 decal_fs(DOut in [[stage_in]], constant Frame& f [[buffer(1)]],
     float3 light = float3(f.params.x) + f.sunColor.rgb * diff;
     return float4(t.rgb * in.tint.rgb * light, t.a * in.tint.a);
 }
+
+// MARK: terrain (render/TerrainView.kt): smooth voxel mesh with per-vertex material colour,
+// lit like parts (sun, sky ambient, shadow map, fog), and a translucent water surface.
+
+struct TIn { float3 pos [[attribute(0)]]; float3 nrm [[attribute(1)]]; float4 col [[attribute(2)]]; };
+struct TOut { float4 position [[position]]; float3 world; float3 normal; float4 color; };
+
+vertex TOut terrain_vs(TIn in [[stage_in]], constant Frame& f [[buffer(1)]]) {
+    TOut o;
+    o.position = f.viewProj * float4(in.pos, 1.0);
+    o.world = in.pos;
+    o.normal = in.nrm;
+    o.color = in.col;
+    return o;
+}
+
+static float terrainShadow(constant Frame& f, float3 world, float ndl, depth2d<float> shadowMap) {
+    if (f.shadowOn.x < 0.5 || ndl <= 0.0) return 1.0;
+    constexpr sampler cmp(coord::normalized, filter::linear, address::clamp_to_edge, compare_func::less_equal);
+    float4 sp = f.shadowVP * float4(world, 1.0);
+    float3 q = sp.xyz / sp.w;
+    float2 uv = float2(q.x * 0.5 + 0.5, 0.5 - q.y * 0.5);
+    if (uv.x <= 0.001 || uv.x >= 0.999 || uv.y <= 0.001 || uv.y >= 0.999 || q.z >= 1.0) return 1.0;
+    float bias = 0.002 + 0.005 * (1.0 - ndl);
+    float2 t = float2(1.0 / 2048.0);
+    float sh = 0.0;
+    for (int dx = -1; dx <= 1; dx++) for (int dy = -1; dy <= 1; dy++) sh += shadowMap.sample_compare(cmp, uv + float2(dx, dy) * t, q.z - bias);
+    sh /= 9.0;
+    float2 e = min(uv, 1.0 - uv);
+    return mix(1.0, sh, clamp(min(e.x, e.y) * 12.0, 0.0, 1.0));
+}
+
+fragment float4 terrain_fs(TOut in [[stage_in]], bool front [[front_facing]], constant Frame& f [[buffer(1)]],
+                           depth2d<float> shadowMap [[texture(3)]]) {
+    float3 n = normalize(in.normal);
+    float3 c = in.color.rgb;
+    // Gentle world-space grain so large areas don't look flat.
+    c *= 1.0 + (fbm2(in.world.xz * 0.35) - 0.5) * 0.16;
+    float3 light = f.lightDir.xyz;
+    float ndl = dot(n, light);
+    float diff = max(ndl, 0.0) * terrainShadow(f, in.world, ndl, shadowMap);
+    float3 sky = mix(f.horizon.rgb, f.zenith.rgb, 0.5);
+    float3 amb = f.params.x * mix(float3(0.82), mix(float3(1.0), sky * 1.2, 0.35), 0.5 + 0.5 * n.y);
+    float3 col = c * (amb + f.sunColor.rgb * diff);
+    col *= f.params.y;
+    float dist = length(f.camPos.xyz - in.world);
+    col = mix(col, f.horizon.rgb, smoothstep(900.0, 5000.0, dist) * 0.7);
+    return float4(col, 1.0);
+}
+
+struct WIn { float3 pos [[attribute(0)]]; float3 nrm [[attribute(1)]]; };
+struct WOut { float4 position [[position]]; float3 world; float3 normal; };
+
+vertex WOut water_vs(WIn in [[stage_in]], constant Frame& f [[buffer(1)]]) {
+    WOut o;
+    float3 p = in.pos;
+    // Small waves on upward-facing water.
+    if (in.nrm.y > 0.5) p.y += sin(p.x * 0.15 + f.params.z * 1.4) * cos(p.z * 0.13 + f.params.z * 1.1) * 0.25;
+    o.position = f.viewProj * float4(p, 1.0);
+    o.world = p;
+    o.normal = in.nrm;
+    return o;
+}
+
+// waterColor.rgb + transparency in .a (Terrain.WaterColor / WaterTransparency).
+fragment float4 water_fs(WOut in [[stage_in]], constant Frame& f [[buffer(1)]], constant float4& water [[buffer(3)]]) {
+    float3 n = normalize(in.normal);
+    float3 v = normalize(f.camPos.xyz - in.world);
+    if (dot(n, v) < 0.0) n = -n;
+    float t = f.params.z;
+    float2 rip = float2(noise2(in.world.xz * 0.2 + t * 0.3), noise2(in.world.xz * 0.23 - t * 0.25)) - 0.5;
+    n = normalize(n + float3(rip.x, 0.0, rip.y) * 0.35);
+    float3 light = f.lightDir.xyz;
+    float diff = max(dot(n, light), 0.0);
+    float3 base = water.rgb * (f.params.x + f.sunColor.rgb * diff * 0.6);
+    float fres = pow(1.0 - max(dot(n, v), 0.0), 3.0);
+    float3 col = mix(base, f.zenith.rgb * 1.1, fres * 0.6);
+    float3 h = normalize(light + v);
+    col += f.sunColor.rgb * pow(max(dot(n, h), 0.0), 80.0) * 0.8;
+    col *= f.params.y;
+    float alpha = clamp(1.0 - water.a * 0.75 + fres * 0.3, 0.25, 0.95);
+    return float4(col, alpha);
+}
+
+vertex float4 terrain_shadow_vs(TIn in [[stage_in]], constant Frame& f [[buffer(1)]]) {
+    return f.shadowVP * float4(in.pos, 1.0);
+}

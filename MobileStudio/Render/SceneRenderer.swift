@@ -51,6 +51,7 @@ final class SceneRenderer: NSObject, MTKViewDelegate {
     private var shadowMap: MTLTexture!
     var shadowsEnabled = true
     private var decalPipeline: MTLRenderPipelineState!
+    private var terrain: TerrainRenderer?
     private var quadMesh: GPUMesh!
     private var depthWrite: MTLDepthStencilState!
     private var depthReadOnly: MTLDepthStencilState!
@@ -107,6 +108,7 @@ final class SceneRenderer: NSObject, MTKViewDelegate {
         skyPipeline = try pipe("sky_vs", "sky_fs", blend: false, vertexDesc: nil)
         overlayPipeline = try pipe("overlay_vs", "overlay_fs", blend: true, vertexDesc: vd)
         decalPipeline = try pipe("decal_vs", "decal_fs", blend: true, vertexDesc: vd)
+        terrain = try? TerrainRenderer(device: device, library: lib)
         let sp = MTLRenderPipelineDescriptor()
         sp.vertexFunction = lib.makeFunction(name: "shadow_vs")
         sp.vertexDescriptor = vd
@@ -184,6 +186,7 @@ final class SceneRenderer: NSObject, MTKViewDelegate {
         let proj = simd_float4x4.perspective(fovY: fov * .pi / 180, aspect: w / max(h, 1), near: 0.1, far: 20000)
         let vp = proj * camCF.inverse.matrix()
         let lighting = store.lightingInfo()
+        terrain?.update(root: store.shownModel, camera: camCF.position)
         let frame = FrameUniforms(
             viewProj: vp, invViewProj: vp.inverse,
             camPos: SIMD4(camCF.position.simd, 1),
@@ -320,6 +323,7 @@ final class SceneRenderer: NSObject, MTKViewDelegate {
                     se.setVertexBuffer(buf, offset: o, index: 2)
                     se.drawPrimitives(type: g.mesh.primitive, vertexStart: 0, vertexCount: g.mesh.vertexCount, instanceCount: g.items.count)
                 }
+                terrain?.drawShadow(se)
                 se.endEncoding()
             }
         }
@@ -351,6 +355,7 @@ final class SceneRenderer: NSObject, MTKViewDelegate {
         enc.setRenderPipelineState(partPipeline)
         enc.setDepthStencilState(depthWrite)
         drawGroups(opaqueList)
+        terrain?.drawSolid(enc)
         // Decals sit 0.01 studs above the face, drawn after opaque geometry.
         enc.setRenderPipelineState(decalPipeline)
         enc.setDepthStencilState(depthReadOnly)
@@ -364,6 +369,7 @@ final class SceneRenderer: NSObject, MTKViewDelegate {
         enc.setRenderPipelineState(partBlendPipeline)
         enc.setDepthStencilState(depthReadOnly)
         drawGroups(transparent.values.filter { !$0.items.isEmpty }.map { ($0, put($0.items)) })
+        terrain?.drawWater(enc)
 
         // Overlays: depth-tested ones first, then always-on-top.
         enc.setRenderPipelineState(overlayPipeline)

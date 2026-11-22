@@ -8,6 +8,8 @@ final class AccountStore: ObservableObject {
 
     @Published private(set) var apiKey: String?
     @Published private(set) var cookie: String?
+    /// The user's own Anthropic API key for the AI Assistant (Keychain, this device only).
+    @Published private(set) var anthropicKey: String?
     @Published var userName: String?
     @Published var userId: Int64?
 
@@ -16,6 +18,7 @@ final class AccountStore: ObservableObject {
     init() {
         apiKey = read("apiKey")
         cookie = read("cookie")
+        anthropicKey = read("anthropicKey")
         userName = UserDefaults.standard.string(forKey: "robloxUserName")
         let id = UserDefaults.standard.object(forKey: "robloxUserId") as? Int64
         userId = id
@@ -35,6 +38,11 @@ final class AccountStore: ObservableObject {
         self.userId = userId
         UserDefaults.standard.set(userName, forKey: "robloxUserName")
         UserDefaults.standard.set(userId, forKey: "robloxUserId")
+    }
+
+    func setAnthropicKey(_ k: String?) {
+        anthropicKey = k?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+        write("anthropicKey", anthropicKey)
     }
 
     func signOut() { setSession(cookie: nil, userName: nil, userId: nil) }

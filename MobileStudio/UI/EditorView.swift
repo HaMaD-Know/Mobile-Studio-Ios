@@ -30,6 +30,8 @@ final class DockState: ObservableObject {
     @Published var properties = DockState.b("properties", true) { didSet { Self.d.set(properties, forKey: "dock.properties") } }
     @Published var toolbox = DockState.b("toolbox", false) { didSet { Self.d.set(toolbox, forKey: "dock.toolbox") } }
     @Published var output = DockState.b("output", false) { didSet { Self.d.set(output, forKey: "dock.output") } }
+    @Published var terrain = DockState.b("terrain", false) { didSet { Self.d.set(terrain, forKey: "dock.terrain") } }
+    @Published var assistant = DockState.b("assistant", false) { didSet { Self.d.set(assistant, forKey: "dock.assistant") } }
     @Published var rightW = DockState.n("rightW", 300) { didSet { Self.d.set(rightW, forKey: "dock.rightW") } }
     @Published var leftW = DockState.n("leftW", 260) { didSet { Self.d.set(leftW, forKey: "dock.leftW") } }
     @Published var rightSplit = DockState.n("rightSplit", 0.45) { didSet { Self.d.set(rightSplit, forKey: "dock.rightSplit") } }
@@ -39,22 +41,22 @@ final class DockState: ObservableObject {
     }
     private var beforeHide: [Bool]?
 
-    var allHidden: Bool { !explorer && !properties && !toolbox && !output }
+    var allHidden: Bool { !explorer && !properties && !toolbox && !output && !terrain && !assistant }
 
     func toggleHideAll() {
         if allHidden, let b = beforeHide {
-            explorer = b[0]; properties = b[1]; toolbox = b[2]; output = b[3]
+            explorer = b[0]; properties = b[1]; toolbox = b[2]; output = b[3]; terrain = b[4]; assistant = b[5]
             beforeHide = nil
         } else if allHidden {
             explorer = true; properties = true
         } else {
-            beforeHide = [explorer, properties, toolbox, output]
-            explorer = false; properties = false; toolbox = false; output = false
+            beforeHide = [explorer, properties, toolbox, output, terrain, assistant]
+            explorer = false; properties = false; toolbox = false; output = false; terrain = false; assistant = false
         }
     }
 
     func resetLayout() {
-        explorer = true; properties = true; toolbox = false; output = false
+        explorer = true; properties = true; toolbox = false; output = false; terrain = false; assistant = false
         rightW = 300; leftW = 260; rightSplit = 0.45; outSplit = 0.6
         beforeHide = nil
     }
@@ -328,18 +330,30 @@ struct DockArea: View {
 
     private var narrow: Bool { size.width < 700 }
     private var showRight: Bool { dock.explorer || dock.properties }
+    private var showLeft: Bool { dock.toolbox || dock.terrain || dock.assistant }
+
+    @ViewBuilder private var leftDock: some View {
+        VStack(spacing: 0) {
+            if dock.terrain { TerrainPanel(store: store, onClose: { dock.terrain = false }) }
+            if dock.terrain && (dock.toolbox || dock.assistant) { Th.border.frame(height: 2) }
+            if dock.assistant { AssistantPanel(store: store, onClose: { dock.assistant = false }) }
+            if dock.assistant && dock.toolbox { Th.border.frame(height: 2) }
+            if dock.toolbox { ToolboxPanel(store: store, onClose: { dock.toolbox = false }) }
+        }
+        .background(Th.panel)
+    }
 
     var body: some View {
         HStack(spacing: 0) {
-            if dock.toolbox && !narrow {
-                ToolboxPanel(store: store, onClose: { dock.toolbox = false })
+            if showLeft && !narrow {
+                leftDock
                     .frame(width: CGFloat(min(dock.leftW, Double(size.width) * 0.4)))
                 VSplitter(width: $dock.leftW, growsLeft: false, range: 200...520)
             }
             centre
                 .overlay(alignment: .leading) {
-                    if dock.toolbox && narrow {
-                        ToolboxPanel(store: store, onClose: { dock.toolbox = false })
+                    if showLeft && narrow {
+                        leftDock
                             .frame(width: min(size.width * 0.85, 360))
                             .shadow(color: .black.opacity(0.4), radius: 8)
                             .transition(.move(edge: .leading))
@@ -351,7 +365,7 @@ struct DockArea: View {
                     .frame(width: narrow ? size.width * 0.5 : CGFloat(min(dock.rightW, Double(size.width) * 0.45)))
             }
         }
-        .animation(.easeInOut(duration: 0.15), value: dock.toolbox)
+        .animation(.easeInOut(duration: 0.15), value: showLeft)
     }
 
     private var centre: some View {
