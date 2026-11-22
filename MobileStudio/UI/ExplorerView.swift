@@ -4,6 +4,8 @@ import StudioCore
 /// Instance tree (port of ui/ExplorerPanel.kt).
 struct ExplorerView: View {
     @ObservedObject var store: StudioStore
+    var onClose: (() -> Void)? = nil
+    var onInsert: (() -> Void)? = nil
     @State private var expanded: Set<ObjectIdentifier> = []
     @State private var renaming: Instance?
     @State private var renameText = ""
@@ -48,21 +50,22 @@ struct ExplorerView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack {
-                Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                TextField("Filter workspace", text: $filter).textInputAutocapitalization(.never).autocorrectionDisabled()
+            PanelHeader(icon: "list.bullet.indent", tint: Th.warn, title: "Explorer", onClose: onClose) {
+                PanelIconButton(icon: "checkmark.square", tint: Th.info) { selectChildren() }
+                PanelIconButton(icon: "plus.square", tint: Th.play) { onInsert?() }
+                PanelIconButton(icon: "minus.square") { expanded.removeAll() }
             }
-            .padding(8)
-            .background(Color(.secondarySystemBackground))
-
-            List(rows()) { row in
-                rowView(row)
-                    .listRowInsets(EdgeInsets(top: 0, leading: 6 + CGFloat(row.depth) * 14, bottom: 0, trailing: 6))
-                    .listRowBackground(store.session.isSelected(row.inst) ? Color.accentColor.opacity(0.25) : Color.clear)
+            TextField("", text: $filter, prompt: Text("Filter workspace (name or class)").foregroundStyle(Th.dim))
+                .textInputAutocapitalization(.never).autocorrectionDisabled()
+                .studioField()
+                .padding(6)
+            ScrollView {
+                LazyVStack(spacing: 0) {
+                    ForEach(rows()) { row in rowView(row) }
+                }
             }
-            .listStyle(.plain)
-            .environment(\.defaultMinListRowHeight, 30)
         }
+        .background(Th.panel)
         .onChange(of: store.selection) { _, sel in
             // Reveal newly selected instances.
             for s in sel {
@@ -83,28 +86,48 @@ struct ExplorerView: View {
         }
     }
 
+    private func selectChildren() {
+        guard let first = store.selection.first, !first.children.isEmpty else { return }
+        expanded.insert(ObjectIdentifier(first))
+        store.session.select(first.children)
+    }
+
     @ViewBuilder
     private func rowView(_ row: Row) -> some View {
         let i = row.inst
         let id = ObjectIdentifier(i)
-        HStack(spacing: 4) {
+        let selected = store.session.isSelected(i)
+        HStack(spacing: 6) {
             if i.children.isEmpty {
-                Color.clear.frame(width: 16)
+                Color.clear.frame(width: 22)
             } else {
-                Image(systemName: expanded.contains(id) ? "chevron.down" : "chevron.right")
-                    .font(.caption2.weight(.bold))
-                    .frame(width: 16, height: 26)
+                Image(systemName: expanded.contains(id) ? "arrowtriangle.down.fill" : "arrowtriangle.right.fill")
+                    .font(.system(size: 11))
+                    .foregroundStyle(selected ? Th.selectText : Th.dim)
+                    .frame(width: 22, height: 30)
                     .contentShape(Rectangle())
                     .onTapGesture { if expanded.contains(id) { expanded.remove(id) } else { expanded.insert(id) } }
             }
-            ClassIcon(className: i.className).frame(width: 18)
-            Text(i.name).lineLimit(1).font(.callout)
+            ClassIcon(className: i.className).frame(width: 20)
+            Text(i.name).lineLimit(1).font(.system(size: 15))
+                .foregroundStyle(selected ? Th.selectText : Th.text)
             Spacer(minLength: 0)
         }
+        .padding(.leading, 6 + CGFloat(row.depth) * 18)
+        .frame(height: 30)
+        .background(selected ? Th.select : Color.clear)
         .contentShape(Rectangle())
-        .onTapGesture { store.session.select([i]) }
+        .onTapGesture(count: 2) {
+            if i.isA("LuaSourceContainer") { store.openScript(i) } else { store.session.select([i]); store.focusSelection() }
+        }
+        .onTapGesture {
+            if store.multiSelect { store.session.toggleSelect(i) } else { store.session.select([i]) }
+        }
         .contextMenu {
             Button("Insert Object…", systemImage: "plus") { insertInto = i }
+            if i.isA("LuaSourceContainer") {
+                Button("Open Script", systemImage: "doc.text") { store.openScript(i) }
+            }
             Button("Rename", systemImage: "pencil") { renameText = i.name; renaming = i }
             if store.session.deletable(i) {
                 Button("Duplicate", systemImage: "plus.square.on.square") { store.session.select([i]); store.session.duplicateSelection() }
@@ -141,7 +164,7 @@ struct ClassIcon: View {
     let className: String
     var body: some View {
         Image(systemName: ClassIcon.symbol(className))
-            .font(.system(size: 13))
+            .font(.system(size: 14))
             .foregroundStyle(ClassIcon.tint(className))
     }
     static func symbol(_ c: String) -> String {
@@ -173,13 +196,27 @@ struct ClassIcon: View {
         }
     }
     static func tint(_ c: String) -> Color {
-        if ClassDb.isA(c, "BasePart") { return .gray }
-        if ClassDb.isA(c, "LuaSourceContainer") { return .blue }
-        if ClassDb.isA(c, "Light") { return .yellow }
-        if c == "Workspace" { return .teal }
-        if c == "Model" { return .orange }
-        if c == "Folder" { return .brown }
-        return .secondary
+        if c == "SpawnLocation" { return Color(argb: -11751600) }
+        if ClassDb.isA(c, "BasePart") { return Color(argb: -3355444) }
+        if c == "ModuleScript" { return Color(argb: -23296) }
+        if c == "LocalScript" { return Color(argb: -11751600) }
+        if ClassDb.isA(c, "LuaSourceContainer") { return Color(argb: -9652481) }
+        if ClassDb.isA(c, "Light") { return Color(argb: -9216) }
+        if ClassDb.isA(c, "GuiObject") || ClassDb.isA(c, "LayerCollector") { return Color(argb: -11751600) }
+        switch c {
+        case "Workspace": return Color(argb: -12417548)
+        case "Players", "Player", "Teams", "Team": return Color(argb: -12417548)
+        case "Lighting": return Color(argb: -9216)
+        case "Model", "Actor": return Color(argb: -3355444)
+        case "Folder": return Color(argb: -2056128)
+        case "Terrain": return Color(argb: -11751600)
+        case "Camera": return Color(argb: -9652481)
+        case "ReplicatedStorage", "ReplicatedFirst", "ServerStorage": return Color(argb: -14575885)
+        case "ServerScriptService", "StarterPlayerScripts", "StarterCharacterScripts": return Color(argb: -9652481)
+        case "MaterialService": return Color(argb: -5592406)
+        case "SoundService", "Sound": return Color(argb: -9652481)
+        default: return Color(argb: -7434610)
+        }
     }
 }
 

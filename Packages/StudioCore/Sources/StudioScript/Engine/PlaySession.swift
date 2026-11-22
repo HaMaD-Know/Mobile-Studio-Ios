@@ -228,7 +228,11 @@ public final class PlaySession: ScriptHost {
 
     // MARK: characters
 
+    /// "Play Here": the first spawn happens at this point instead of a SpawnLocation.
+    public var spawnOverride: Vector3?
+
     private func spawnLocation() -> CFrame {
+        if let p = spawnOverride { return .at(p + Vector3(0, 3, 0)) }
         let spawns = dm.workspace.descendants().filter { $0.className == "SpawnLocation" && $0.get("Enabled")?.asBool != false }
         guard let s = spawns.randomElement() else { return .at(Vector3(0, 5, 0)) }
         let cf = PartData.cframe(s), size = PartData.size(s)

@@ -3,9 +3,10 @@ import UIKit
 import StudioCore
 import StudioScript
 
-/// Luau code editor (port of ui/ScriptEditor.kt + ui/Autocomplete.kt): syntax colouring,
-/// auto-indent and `end` insertion, context-aware completions, live syntax check, find.
-struct ScriptEditorView: View {
+/// Luau code editor shown as a document tab (port of ui/ScriptEditor.kt + ui/Autocomplete.kt):
+/// path bar with line count, Check and Find, a line-number gutter, syntax colouring, auto-indent
+/// and `end` insertion, completions and the symbol key bar.
+struct ScriptDocView: View {
     @ObservedObject var store: StudioStore
     let script: Instance
     @State private var text = ""
@@ -15,70 +16,106 @@ struct ScriptEditorView: View {
     @State private var findText = ""
     @State private var showFind = false
     @State private var editorRef = EditorRef()
-    @Environment(\.dismiss) private var dismiss
+
+    static let keys = ["Tab", "(", ")", "{", "}", "[", "]", "=", "\"", ":", ".", ",", "~", "#", "end", "local", "function", "then"]
 
     var body: some View {
-        NavigationStack {
-            VStack(spacing: 0) {
-                if showFind {
-                    HStack {
-                        TextField("Find", text: $findText).textFieldStyle(.roundedBorder)
-                            .autocorrectionDisabled().textInputAutocapitalization(.never)
-                            .onSubmit { editorRef.find(findText) }
-                        Button("Next") { editorRef.find(findText) }
-                    }
-                    .padding(8)
+        VStack(spacing: 0) {
+            pathBar
+            if showFind {
+                HStack(spacing: 6) {
+                    TextField("", text: $findText, prompt: Text("Find").foregroundStyle(Th.dim))
+                        .autocorrectionDisabled().textInputAutocapitalization(.never)
+                        .onSubmit { editorRef.find(findText) }
+                        .studioField()
+                    Button("Next") { editorRef.find(findText) }.foregroundStyle(Th.info)
                 }
-                CodeTextView(text: $text, cursor: $cursor, ref: editorRef)
-                    .onChange(of: text) { _, t in
-                        syntaxError = ScriptSyntax.check(t)
-                        completions = Autocomplete.complete(text: t, cursor: cursor, model: store.model, script: script)
-                    }
-                    .onChange(of: cursor) { _, c in completions = Autocomplete.complete(text: text, cursor: c, model: store.model, script: script) }
-                if let e = syntaxError {
-                    Label(e, systemImage: "exclamationmark.triangle.fill")
-                        .font(.caption).foregroundStyle(.orange).lineLimit(2)
-                        .padding(.horizontal, 10).padding(.vertical, 4)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(Color(.secondarySystemBackground))
+                .padding(6)
+                .background(Th.header)
+            }
+            CodeTextView(text: $text, cursor: $cursor, ref: editorRef)
+                .onChange(of: text) { _, t in
+                    store.scriptDrafts[ObjectIdentifier(script)] = t
+                    syntaxError = ScriptSyntax.check(t)
+                    completions = Autocomplete.complete(text: t, cursor: cursor, model: store.model, script: script)
                 }
-                if !completions.isEmpty {
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 6) {
-                            ForEach(completions.prefix(30)) { c in
-                                Button { editorRef.accept(c) } label: {
-                                    HStack(spacing: 4) {
-                                        Image(systemName: c.kind.symbol).font(.caption2).foregroundStyle(c.kind.tint)
-                                        Text(c.label).font(.system(.footnote, design: .monospaced))
-                                    }
-                                    .padding(.horizontal, 8).padding(.vertical, 6)
-                                    .background(Color(.tertiarySystemFill), in: Capsule())
-                                }
-                                .foregroundStyle(.primary)
-                            }
+                .onChange(of: cursor) { _, c in completions = Autocomplete.complete(text: text, cursor: c, model: store.model, script: script) }
+            if let e = syntaxError {
+                Label(e, systemImage: "exclamationmark.triangle.fill")
+                    .font(.system(size: 12)).foregroundStyle(Th.warn).lineLimit(2)
+                    .padding(.horizontal, 10).padding(.vertical, 4)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Th.header)
+            }
+            if !completions.isEmpty { completionBar }
+            keyBar
+        }
+        .background(Th.editorBg)
+        .onAppear {
+            text = store.scriptDrafts[ObjectIdentifier(script)] ?? script.get("Source")?.description ?? ""
+            syntaxError = ScriptSyntax.check(text)
+        }
+    }
+
+    private var pathBar: some View {
+        HStack(spacing: 10) {
+            Image(systemName: ClassIcon.symbol(script.className)).foregroundStyle(ClassIcon.tint(script.className))
+            Text(script.fullName()).font(.system(size: 15)).foregroundStyle(Th.text).lineLimit(1).truncationMode(.head)
+            Spacer(minLength: 6)
+            Text("\(lineCount) lines").font(.system(size: 14)).foregroundStyle(Th.dim)
+            Button {
+                if let e = ScriptSyntax.check(text) { store.showToast(e) } else { store.showToast("No syntax errors") }
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "checkmark.rectangle.portrait.fill").foregroundStyle(Th.play)
+                    Text("Check").foregroundStyle(Th.text)
+                }
+                .font(.system(size: 15))
+            }
+            .buttonStyle(.plain)
+            PanelIconButton(icon: "magnifyingglass") { showFind.toggle() }
+        }
+        .padding(.horizontal, 12)
+        .frame(height: 38)
+        .background(Th.header)
+    }
+
+    private var lineCount: Int { text.reduce(1) { $1 == "\n" ? $0 + 1 : $0 } }
+
+    private var completionBar: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 6) {
+                ForEach(completions.prefix(30)) { c in
+                    Button { editorRef.accept(c) } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: c.kind.symbol).font(.system(size: 11)).foregroundStyle(c.kind.tint)
+                            Text(c.label).font(.system(size: 13, design: .monospaced)).foregroundStyle(Th.text)
                         }
                         .padding(.horizontal, 8).padding(.vertical, 6)
+                        .background(Th.hover, in: RoundedRectangle(cornerRadius: 4))
                     }
-                    .background(.bar)
+                    .buttonStyle(.plain)
                 }
             }
-            .navigationTitle(script.name)
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
-                ToolbarItemGroup(placement: .primaryAction) {
-                    Button { showFind.toggle() } label: { Image(systemName: "magnifyingglass") }
-                    Button("Done") {
-                        store.setProp(script, "Source", .string(text))
-                        dismiss()
+            .padding(.horizontal, 8).padding(.vertical, 5)
+        }
+        .background(Th.header)
+    }
+
+    private var keyBar: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 0) {
+                ForEach(Self.keys, id: \.self) { k in
+                    Button { editorRef.insert(k == "Tab" ? "\t" : (k.count > 1 ? k + " " : k)) } label: {
+                        Text(k).font(.system(size: 16)).foregroundStyle(Th.text)
+                            .padding(.horizontal, 11).frame(height: 40)
+                            .contentShape(Rectangle())
                     }
+                    .buttonStyle(.plain)
                 }
-            }
-            .onAppear {
-                text = script.get("Source")?.description ?? ""
-                syntaxError = ScriptSyntax.check(text)
             }
         }
+        .background(Th.topbar)
     }
 }
 
@@ -86,6 +123,7 @@ final class EditorRef {
     weak var view: UITextView?
     var onAccept: ((Completion) -> Void)?
     func accept(_ c: Completion) { onAccept?(c) }
+    func insert(_ s: String) { view?.insertText(s) }
     func find(_ s: String) {
         guard let v = view, !s.isEmpty else { return }
         let ns = v.text as NSString
@@ -98,6 +136,72 @@ final class EditorRef {
     }
 }
 
+/// UITextView with a line-number gutter that scrolls with the text.
+final class GutterTextView: UITextView {
+    let gutter = LineGutterView()
+    static let gutterWidth: CGFloat = 40
+
+    override init(frame: CGRect, textContainer: NSTextContainer?) {
+        super.init(frame: frame, textContainer: textContainer)
+        gutter.textView = self
+        addSubview(gutter)
+    }
+    required init?(coder: NSCoder) { fatalError() }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        let h = max(contentSize.height, bounds.height) + 200
+        let f = CGRect(x: 0, y: -100, width: Self.gutterWidth, height: h)
+        if gutter.frame != f { gutter.frame = f; gutter.setNeedsDisplay() }
+        sendSubviewToBack(gutter)
+    }
+}
+
+final class LineGutterView: UIView {
+    weak var textView: UITextView?
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        isOpaque = false
+        isUserInteractionEnabled = false
+        contentMode = .redraw
+    }
+    required init?(coder: NSCoder) { fatalError() }
+
+    override func draw(_ rect: CGRect) {
+        guard let tv = textView else { return }
+        let theme = ThemeStore.shared.current
+        UIColor(argb: theme.editorGutter).setFill()
+        UIRectFill(bounds)
+        let lm = tv.layoutManager
+        let ns = tv.text as NSString
+        let attrs: [NSAttributedString.Key: Any] = [.font: UIFont.monospacedSystemFont(ofSize: 13, weight: .regular),
+                                                    .foregroundColor: UIColor(argb: theme.dim)]
+        let inset = tv.textContainerInset.top
+        var line = 1
+        var charIndex = 0
+        if ns.length == 0 {
+            ("1" as NSString).draw(at: CGPoint(x: 8, y: inset + 100), withAttributes: attrs)
+            return
+        }
+        while charIndex < ns.length {
+            let lineRange = ns.lineRange(for: NSRange(location: charIndex, length: 0))
+            let glyph = lm.glyphIndexForCharacter(at: lineRange.location)
+            let r = lm.lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil)
+            let y = r.minY + inset + 100
+            if y + r.height >= rect.minY && y <= rect.maxY {
+                ("\(line)" as NSString).draw(at: CGPoint(x: 8, y: y + 1), withAttributes: attrs)
+            }
+            line += 1
+            charIndex = NSMaxRange(lineRange)
+        }
+        if ns.hasSuffix("\n") {
+            let r = lm.extraLineFragmentRect
+            ("\(line)" as NSString).draw(at: CGPoint(x: 8, y: r.minY + inset + 101), withAttributes: attrs)
+        }
+    }
+}
+
 /// UITextView with Luau highlighting and smart newline handling.
 struct CodeTextView: UIViewRepresentable {
     @Binding var text: String
@@ -107,7 +211,7 @@ struct CodeTextView: UIViewRepresentable {
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
     func makeUIView(context: Context) -> UITextView {
-        let v = UITextView()
+        let v = GutterTextView(frame: .zero, textContainer: nil)
         v.delegate = context.coordinator
         v.autocorrectionType = .no
         v.autocapitalizationType = .none
@@ -115,8 +219,9 @@ struct CodeTextView: UIViewRepresentable {
         v.smartDashesType = .no
         v.spellCheckingType = .no
         v.keyboardType = .asciiCapable
-        v.backgroundColor = UIColor(red: 0.12, green: 0.12, blue: 0.13, alpha: 1)
-        v.textContainerInset = UIEdgeInsets(top: 10, left: 6, bottom: 40, right: 6)
+        v.backgroundColor = UIColor(argb: ThemeStore.shared.current.editorBg)
+        v.tintColor = UIColor(argb: ThemeStore.shared.current.accent)
+        v.textContainerInset = UIEdgeInsets(top: 10, left: GutterTextView.gutterWidth + 6, bottom: 40, right: 6)
         v.alwaysBounceVertical = true
         ref.view = v
         ref.onAccept = { [weak v, coord = context.coordinator] c in
@@ -190,6 +295,7 @@ struct CodeTextView: UIViewRepresentable {
             tv.selectedRange = sel
             parent.text = tv.text
             parent.cursor = sel.location
+            (tv as? GutterTextView)?.gutter.setNeedsDisplay()
         }
 
         func textViewDidChangeSelection(_ tv: UITextView) { parent.cursor = tv.selectedRange.location }
@@ -216,14 +322,15 @@ enum LuauHighlighter {
                                         "setmetatable", "getmetatable", "rawget", "rawset", "next", "unpack", "BrickColor", "TweenInfo",
                                         "Ray", "Random", "os", "utf8", "bit32", "buffer", "shared", "_G", "self", "delay", "spawn"]
     static let font = UIFont.monospacedSystemFont(ofSize: 14, weight: .regular)
-    static let base = UIColor(white: 0.86, alpha: 1)
-    static let kw = UIColor(red: 0.97, green: 0.43, blue: 0.43, alpha: 1)
-    static let bi = UIColor(red: 0.52, green: 0.84, blue: 0.97, alpha: 1)
-    static let str = UIColor(red: 0.68, green: 0.95, blue: 0.48, alpha: 1)
-    static let num = UIColor(red: 1.0, green: 0.78, blue: 0.40, alpha: 1)
-    static let com = UIColor(white: 0.5, alpha: 1)
+    static var base: UIColor { UIColor(argb: ThemeStore.shared.current.editorText) }
+    static var kw: UIColor { UIColor(argb: ThemeStore.shared.current.synKeyword) }
+    static var bi: UIColor { UIColor(argb: ThemeStore.shared.current.synBuiltin) }
+    static var str: UIColor { UIColor(argb: ThemeStore.shared.current.synString) }
+    static var num: UIColor { UIColor(argb: ThemeStore.shared.current.synNumber) }
+    static var com: UIColor { UIColor(argb: ThemeStore.shared.current.synComment) }
 
     static func highlight(_ text: String) -> NSAttributedString {
+        let base = Self.base, kw = Self.kw, bi = Self.bi, str = Self.str, num = Self.num, com = Self.com
         let out = NSMutableAttributedString(string: text, attributes: [.font: font, .foregroundColor: base])
         let s = Array(text.utf16)
         var i = 0

@@ -8,7 +8,8 @@ import StudioScript
 /// 2-finger drag = pan, pinch = fly forward/back, double-tap = focus selection.
 struct ViewportView: UIViewRepresentable {
     @ObservedObject var store: StudioStore
-    var multiSelect: Bool
+    /// Stops drawing while a script tab covers the view.
+    var paused: Bool = false
 
     func makeCoordinator() -> Coordinator { Coordinator(store: store) }
 
@@ -43,15 +44,15 @@ struct ViewportView: UIViewRepresentable {
     }
 
     func updateUIView(_ v: MTKView, context: Context) {
-        context.coordinator.multiSelect = multiSelect
+        if v.isPaused != paused { v.isPaused = paused }
     }
 
     final class Coordinator: NSObject, UIGestureRecognizerDelegate {
         let store: StudioStore
         var renderer: SceneRenderer?
         weak var view: MTKView?
-        var multiSelect = false
         private var dragging = false
+        private var boxStart: CGPoint?
         private var lastPinch: CGFloat = 1
 
         init(store: StudioStore) { self.store = store }
@@ -64,7 +65,7 @@ struct ViewportView: UIViewRepresentable {
             MainActor.assumeIsolated {
                 if let play = store.play { play.tap(x: Float(p.x), y: Float(p.y)); return }
                 if store.handle(at: p) != nil { return }
-                store.tap(at: p, additive: multiSelect)
+                store.tap(at: p, additive: store.multiSelect)
             }
         }
 
@@ -91,15 +92,22 @@ struct ViewportView: UIViewRepresentable {
                 case .began:
                     // Start where the finger first touched, not where the pan was recognised.
                     let start = CGPoint(x: p.x - g.translation(in: view).x, y: p.y - g.translation(in: view).y)
+                    boxStart = nil
                     if let h = store.handle(at: start) {
                         dragging = true
                         store.beginDrag(h, at: start)
                         store.updateDrag(at: p)
+                    } else if store.boxSelect {
+                        dragging = false
+                        boxStart = start
+                        BoxSelectState.shared.rect = CGRect(origin: start, size: .zero)
                     } else {
                         dragging = false
                     }
                 case .changed:
-                    if dragging {
+                    if let b = boxStart {
+                        BoxSelectState.shared.rect = CGRect(x: min(b.x, p.x), y: min(b.y, p.y), width: abs(p.x - b.x), height: abs(p.y - b.y))
+                    } else if dragging {
                         store.updateDrag(at: p)
                     } else {
                         let t = g.translation(in: view)
@@ -107,6 +115,11 @@ struct ViewportView: UIViewRepresentable {
                         g.setTranslation(.zero, in: view)
                     }
                 default:
+                    if boxStart != nil, let r = BoxSelectState.shared.rect {
+                        store.selectInBox(r, additive: store.multiSelect)
+                    }
+                    boxStart = nil
+                    BoxSelectState.shared.rect = nil
                     if dragging { store.endDrag(); dragging = false }
                 }
             }
@@ -140,34 +153,93 @@ struct ViewportView: UIViewRepresentable {
     }
 }
 
-/// Hold-to-fly buttons (the Android app's on-screen fly controls).
-struct FlyPad: View {
+/// Rectangle being dragged in box-select mode.
+final class BoxSelectState: ObservableObject {
+    static let shared = BoxSelectState()
+    @Published var rect: CGRect?
+}
+
+struct BoxSelectOverlay: View {
+    @ObservedObject var state = BoxSelectState.shared
+    var body: some View {
+        if let r = state.rect {
+            Rectangle()
+                .fill(Th.accent.opacity(0.18))
+                .overlay(Rectangle().stroke(Th.info, style: StrokeStyle(lineWidth: 1.5, dash: [6, 4])))
+                .frame(width: r.width, height: r.height)
+                .position(x: r.midX, y: r.midY)
+                .allowsHitTesting(false)
+        }
+    }
+}
+
+/// On-screen editor controls (ViewportView.TouchLayer): fly stick, up/down, fly speed and the
+/// Box / Multi / In Groups selection toggles.
+struct EditControls: View {
     @ObservedObject var store: StudioStore
 
     var body: some View {
-        HStack(alignment: .bottom, spacing: 18) {
-            VStack(spacing: 6) {
-                hold("chevron.up", SIMD3(0, 0, 1))
-                HStack(spacing: 6) {
-                    hold("chevron.left", SIMD3(-1, 0, 0))
-                    hold("chevron.down", SIMD3(0, 0, -1))
-                    hold("chevron.right", SIMD3(1, 0, 0))
+        ZStack {
+            VStack {
+                Spacer()
+                HStack {
+                    Thumbstick { v in
+                        store.flyInput.x = Float(v.x)
+                        store.flyInput.z = Float(-v.y)
+                    }
+                    .frame(width: 124, height: 124)
+                    .padding(.leading, 28).padding(.bottom, 24)
+                    Spacer()
                 }
             }
-            VStack(spacing: 6) {
-                hold("arrow.up.to.line", SIMD3(0, 1, 0))
-                hold("arrow.down.to.line", SIMD3(0, -1, 0))
+            VStack {
+                Spacer()
+                HStack(alignment: .bottom, spacing: 12) {
+                    Spacer()
+                    VStack(spacing: 12) {
+                        Spacer().frame(height: 56)
+                        roundButton("rectangle.dashed.badge.record", on: store.boxSelect, size: 56) { store.toggleBoxSelect() }
+                        Spacer().frame(height: 56)
+                    }
+                    VStack(spacing: 12) {
+                        roundButton("square.on.square", on: store.selectInsideModels, size: 56) { store.toggleInsideModels() }
+                        roundButton("rectangle.dashed", on: store.multiSelect, size: 56) { store.toggleMultiSelect() }
+                        Button { store.flyMul = FlySpeeds.next(store.flyMul) } label: {
+                            Text(FlySpeeds.label(store.flyMul)).font(.system(size: 17, weight: .semibold))
+                                .foregroundStyle(.white).frame(width: 56, height: 56)
+                                .background(Circle().fill(Color(white: 0.16, opacity: 0.85)))
+                                .overlay(Circle().stroke(.white.opacity(0.85), lineWidth: 2))
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    VStack(spacing: 12) {
+                        Spacer().frame(height: 40)
+                        hold("chevron.up", 1)
+                        hold("chevron.down", -1)
+                    }
+                }
+                .padding(.trailing, 22).padding(.bottom, 26)
             }
         }
     }
 
-    private func hold(_ symbol: String, _ dir: SIMD3<Float>) -> some View {
-        Image(systemName: symbol)
-            .font(.system(size: 16, weight: .semibold))
-            .frame(width: 42, height: 42)
-            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10))
+    private func roundButton(_ icon: String, on: Bool, size: CGFloat, _ action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: icon).font(.system(size: 20, weight: .medium)).foregroundStyle(.white)
+                .frame(width: size, height: size)
+                .background(Circle().fill(on ? Th.accent : Color(white: 0.16, opacity: 0.85)))
+                .overlay(Circle().stroke(.white.opacity(0.85), lineWidth: 2))
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func hold(_ icon: String, _ dir: Float) -> some View {
+        Image(systemName: icon).font(.system(size: 28, weight: .semibold)).foregroundStyle(.white)
+            .frame(width: 70, height: 70)
+            .background(Circle().fill(Color(white: 0.16, opacity: 0.85)))
+            .overlay(Circle().stroke(.white.opacity(0.85), lineWidth: 2.5))
             .onLongPressGesture(minimumDuration: 0, maximumDistance: 60, pressing: { down in
-                if down { store.flyInput += dir } else { store.flyInput -= dir }
+                store.flyInput.y = down ? dir : 0
             }, perform: {})
     }
 }

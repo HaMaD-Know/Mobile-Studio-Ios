@@ -32,12 +32,26 @@ final class StudioStore: ObservableObject, TreeListener {
     @Published var fileName = "Place1"
     @Published var fileIsXml = false
     @Published var hasDocument = false
+    /// Start page shown over an open place (File → Home).
+    @Published var showStart = false
     @Published var toast: String?
     @Published var moveSnap: Float = 1
     @Published var rotSnapDegrees: Float = 15
     @Published var snapEnabled = true
     @Published var selectInsideModels = false
-    @Published var output: [String] = []
+    @Published var output: [OutputLine] = []
+    @Published var rotSnapEnabled = true
+    /// Viewport selection modes (the round buttons on the Android viewport).
+    @Published var boxSelect = false
+    @Published var multiSelect = false
+    /// Fly speed multiplier shown as "x1" on the viewport.
+    @Published var flyMul: Float = 1
+    @Published var shadows = true
+    /// Scripts open as document tabs next to the place tab (nil active = the place).
+    @Published var openScripts: [Instance] = []
+    @Published var activeScript: Instance?
+    /// Unsaved editor text per open script.
+    var scriptDrafts: [ObjectIdentifier: String] = [:]
     /// Running Play session (nil while editing).
     @Published var play: PlaySession?
     /// Bumped every few frames while playing so the HUD refreshes.
@@ -47,7 +61,6 @@ final class StudioStore: ObservableObject, TreeListener {
     /// Edit-time runtime for plugins and the command bar.
     private(set) var pluginHost: PluginHost?
     @Published var pluginButtons: [PluginHost.Button] = []
-    @Published var editingScript: Instance?
     /// (universeId, placeId) when the place came from / was published to Roblox.
     @Published var cloudPlace: (Int64, Int64)?
     /// On-screen fly controls: x strafe, y up/down, z forward.
@@ -82,11 +95,11 @@ final class StudioStore: ObservableObject, TreeListener {
     private func makePluginHost() {
         pluginHost?.unloadAll()
         let host = PluginHost(model: model)
-        host.onOutput = { [weak self] level, line in self?.log((level == .error ? "⛔︎ " : level == .warn ? "⚠︎ " : "") + line) }
+        host.onOutput = { [weak self] level, line in self?.log(line, level == .error ? .error : level == .warn ? .warn : .print) }
         host.rt.selectionProvider = { [weak self] in self?.session.selection ?? [] }
         host.rt.selectionSetter = { [weak self] list in self?.session.select(list) }
         host.rt.onPluginsChanged = { [weak self] in DispatchQueue.main.async { self?.refreshPluginButtons() } }
-        host.rt.openScriptHandler = { [weak self] s in self?.editingScript = s }
+        host.rt.openScriptHandler = { [weak self] s in self?.openScript(s) }
         pluginHost = host
         let files = (try? FileManager.default.contentsOfDirectory(at: StudioStore.pluginsFolder, includingPropertiesForKeys: nil)) ?? []
         for f in files.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) {
@@ -103,6 +116,7 @@ final class StudioStore: ObservableObject, TreeListener {
     }
 
     func refreshPluginButtons() { pluginButtons = pluginHost?.buttons() ?? [] }
+    func reloadPlugins() { makePluginHost(); showToast("Plugins reloaded") }
 
     func importPlugin(_ url: URL) {
         let access = url.startAccessingSecurityScopedResource()
@@ -144,8 +158,8 @@ final class StudioStore: ObservableObject, TreeListener {
         DispatchQueue.main.async { self.pendingProps = false; self.propsVersion += 1 }
     }
 
-    func log(_ s: String) {
-        output.append(s)
+    func log(_ s: String, _ kind: OutputLine.Kind = .info) {
+        output.append(OutputLine(text: s, kind: kind))
         if output.count > 500 { output.removeFirst(output.count - 500) }
     }
     func showToast(_ s: String) {
@@ -166,7 +180,7 @@ final class StudioStore: ObservableObject, TreeListener {
         do {
             let data = try Data(contentsOf: url)
             let doc = try RbxFile.read(data)
-            for w in doc.warnings { log("⚠︎ \(w)") }
+            for w in doc.warnings { log(w, .warn) }
             let ext = url.pathExtension.lowercased()
             if RbxFile.isPlace(doc) || ext == "rbxl" || ext == "rbxlx" {
                 replace(PlaceFactory.fromDocument(doc), url: url, name: url.deletingPathExtension().lastPathComponent,
@@ -175,17 +189,18 @@ final class StudioStore: ObservableObject, TreeListener {
                 log("Opened \(url.lastPathComponent)")
             } else {
                 session.insertDocument(doc)
-                hasDocument = true
+                hasDocument = true; showStart = false
                 log("Inserted model \(url.lastPathComponent)")
             }
         } catch {
             showToast("Could not open: \(error.localizedDescription)")
-            log("Error opening \(url.lastPathComponent): \(error.localizedDescription)")
+            log("Error opening \(url.lastPathComponent): \(error.localizedDescription)", .error)
         }
     }
 
     private func replace(_ dm: DataModel, url: URL?, name: String, xml: Bool) {
         session.model.removeListener(self)
+        openScripts = []; activeScript = nil; scriptDrafts = [:]
         session.replaceModel(dm)
         dm.addListener(self)
         cloudPlace = nil
@@ -194,6 +209,7 @@ final class StudioStore: ObservableObject, TreeListener {
         fileName = name
         fileIsXml = xml
         hasDocument = true
+        showStart = false
         if let cam = dm.workspace.get("CurrentCamera")?.asInstance, let cf = cam.get("CFrame")?.asCFrame, cf != .identity {
             camera.setFrom(cf)
         } else {
@@ -207,7 +223,7 @@ final class StudioStore: ObservableObject, TreeListener {
     func openData(_ data: Data, name: String, cloud: (Int64, Int64)?) {
         do {
             let doc = try RbxFile.read(data)
-            for w in doc.warnings { log("⚠︎ \(w)") }
+            for w in doc.warnings { log(w, .warn) }
             replace(PlaceFactory.fromDocument(doc), url: nil, name: name, xml: false)
             cloudPlace = cloud
             log("Opened \(name) from Roblox")
@@ -217,6 +233,7 @@ final class StudioStore: ObservableObject, TreeListener {
     /// Bytes for saving. The Android app writes binary; XML export is not ported yet, so .rbxlx
     /// sources are saved as binary .rbxl.
     func placeData() -> Data {
+        commitScripts()
         if let cam = model.workspace.get("CurrentCamera")?.asInstance { cam.set("CFrame", .cframe(camera.cframe()), notify: false) }
         return session.serializePlace()
     }
@@ -261,7 +278,7 @@ final class StudioStore: ObservableObject, TreeListener {
         }
         if flyInput != .zero {
             let v = camera.right * flyInput.x + Vector3(0, 1, 0) * flyInput.y + camera.forward * flyInput.z
-            camera.pos += v * (flySpeed * dt)
+            camera.pos += v * (flySpeed * flyMul * dt)
         }
     }
 
@@ -283,15 +300,17 @@ final class StudioStore: ObservableObject, TreeListener {
 
     // MARK: Play mode
 
-    func startPlay() {
+    func startPlay(at spawn: Vector3? = nil) {
         guard play == nil else { return }
+        commitScripts()
         let session = PlaySession(editModel: model)
+        session.spawnOverride = spawn
         session.viewport = Vector2(Float(viewSize.width), Float(viewSize.height))
         session.onOutput = { [weak self] level, line in
             switch level {
-            case .info: self?.log(line)
-            case .warn: self?.log("⚠︎ " + line)
-            case .error: self?.log("⛔︎ " + line)
+            case .info: self?.log(line, .print)
+            case .warn: self?.log(line, .warn)
+            case .error: self?.log(line, .error)
             }
         }
         session.onSound = { [weak self] sound, on in self?.audio.set(sound, playing: on) }
@@ -306,7 +325,7 @@ final class StudioStore: ObservableObject, TreeListener {
         play = session
         partsCacheStamp = -1
         session.start()
-        log("▶︎ Play started")
+        log("Playtest started")
     }
 
     func stopPlay() {
@@ -316,7 +335,7 @@ final class StudioStore: ObservableObject, TreeListener {
         play = nil
         partsCacheStamp = -1
         Instance.changeCount += 1
-        log("■ Play stopped")
+        log("Playtest stopped")
     }
 
     struct Lighting { var sunDir: SIMD3<Float>; var sunColor: SIMD3<Float>; var ambient: Float }
@@ -337,6 +356,83 @@ final class StudioStore: ObservableObject, TreeListener {
     func ray(at p: CGPoint) -> (Vector3, Vector3) {
         let r = camera.ray(x: Float(p.x), y: Float(p.y), width: Float(viewSize.width), height: Float(viewSize.height))
         return (r.origin, r.dir)
+    }
+
+    // MARK: script tabs
+
+    func openScript(_ s: Instance) {
+        guard s.isA("LuaSourceContainer") else { return }
+        if !openScripts.contains(where: { $0 === s }) { openScripts.append(s) }
+        commitScripts()
+        activeScript = s
+    }
+
+    func closeScript(_ s: Instance) {
+        commitScripts()
+        scriptDrafts[ObjectIdentifier(s)] = nil
+        openScripts.removeAll { $0 === s }
+        if activeScript === s { activeScript = openScripts.last }
+    }
+
+    func showPlace() { commitScripts(); activeScript = nil }
+
+    /// Writes edited script text back to Source (one undo step per script).
+    func commitScripts() {
+        for s in openScripts {
+            guard let d = scriptDrafts[ObjectIdentifier(s)], d != (s.get("Source")?.description ?? "") else { continue }
+            setProp(s, "Source", .string(d))
+        }
+    }
+
+    // MARK: selection
+
+    /// Box select: everything whose centre projects inside `rect` (view points).
+    func selectInBox(_ rect: CGRect, additive: Bool) {
+        let w = Float(viewSize.width), h = Float(viewSize.height)
+        var picked: [Instance] = []
+        for part in renderParts() where part.get("Locked")?.asBool != true {
+            guard let sp = camera.project(PartData.cframe(part).position, width: w, height: h),
+                  rect.contains(CGPoint(x: CGFloat(sp.x), y: CGFloat(sp.y))) else { continue }
+            let t = Picking.selectable(for: part, workspace: model.workspace, insideModels: selectInsideModels)
+            if !picked.contains(where: { $0 === t }) { picked.append(t) }
+        }
+        session.select(additive ? session.selection + picked.filter { p in !session.selection.contains { $0 === p } } : picked)
+        showToast("Selected \(picked.count) object" + (picked.count == 1 ? "" : "s"))
+    }
+
+    /// Sets a property on every selected part (ribbon Color / Material / Anchor / Lock...).
+    func setOnSelectedParts(_ name: String, _ v: PropValue, label: String) {
+        let parts = session.selectedParts()
+        guard !parts.isEmpty else { showToast("Select a part first"); return }
+        session.undo.begin(label)
+        for p in parts {
+            if name == "Color3uint8" { p.propTypes["Color3uint8"] = PropType.COLOR3U8 }
+            session.setProp(p, name, v)
+        }
+        session.undo.commit()
+    }
+
+    /// Inserts `cls` into the first selected instance (or `fallback`, else Workspace).
+    @discardableResult
+    func insertInto(_ cls: String, fallback: String? = nil) -> Instance {
+        let parent = session.selection.first ?? fallback.flatMap { model.findService($0) } ?? model.workspace
+        let i = session.insertObject(cls, into: parent)
+        session.select([i])
+        log("Inserted \(cls)")
+        return i
+    }
+
+    func toggleBoxSelect() {
+        boxSelect.toggle()
+        showToast(boxSelect ? "Box select: drag to select" : "Box select off")
+    }
+    func toggleMultiSelect() {
+        multiSelect.toggle()
+        showToast(multiSelect ? "Multi-select: taps add or remove" : "Multi-select off")
+    }
+    func toggleInsideModels() {
+        selectInsideModels.toggle()
+        showToast(selectInsideModels ? "Select inside models: taps pick single parts in groups" : "Taps select whole models again")
     }
 
     func tap(at p: CGPoint, additive: Bool) {
@@ -522,7 +618,7 @@ final class StudioStore: ObservableObject, TreeListener {
             guard let hit = Picking.rayPlane(origin: o, dir: d, point: dr.center, normal: dr.axisDir) else { return }
             let v = (hit - dr.center).unit
             var ang = atan2(dr.startVec.cross(v).dot(dr.axisDir), dr.startVec.dot(v))
-            if snapEnabled && rotSnapDegrees > 0 {
+            if rotSnapEnabled && rotSnapDegrees > 0 {
                 let step = rotSnapDegrees * .pi / 180
                 ang = (ang / step).rounded() * step
             }
@@ -627,4 +723,23 @@ enum Recents {
         var stale = false
         return try URL(resolvingBookmarkData: d, options: [], relativeTo: nil, bookmarkDataIsStale: &stale)
     }
+}
+
+/// One Output line: time stamp, text and colour class (studio info is blue, prints are plain).
+struct OutputLine: Identifiable {
+    enum Kind { case print, info, warn, error }
+    let id = UUID()
+    let time: String
+    let text: String
+    let kind: Kind
+    init(text: String, kind: Kind) {
+        self.text = text
+        self.kind = kind
+        time = OutputLine.formatter.string(from: Date())
+    }
+    private static let formatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "HH:mm:ss.SSS"
+        return f
+    }()
 }

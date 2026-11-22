@@ -176,6 +176,8 @@ final class SceneRenderer: NSObject, MTKViewDelegate {
         inflight.wait()
         ringIndex = (ringIndex + 1) % 3
         store.tick()
+        shadowsEnabled = store.shadows
+        FPSMeter.shared.frame()
 
         let w = Float(view.drawableSize.width), h = Float(view.drawableSize.height)
         let (camCF, fov) = store.renderCamera()

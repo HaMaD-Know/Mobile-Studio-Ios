@@ -7,18 +7,17 @@ import StudioScript
 struct PlayHUD: View {
     @ObservedObject var store: StudioStore
     let play: PlaySession
+    @State private var showChat = true
+    @State private var chatText = ""
 
     var body: some View {
         let _ = store.hudTick
         ZStack {
             VStack {
                 HStack(alignment: .top) {
-                    Button { store.stopPlay() } label: {
-                        Label("Stop", systemImage: "stop.fill")
-                            .font(.headline)
-                            .padding(.horizontal, 14).padding(.vertical, 8)
-                            .background(.red.opacity(0.85), in: Capsule())
-                            .foregroundStyle(.white)
+                    VStack(alignment: .leading, spacing: 8) {
+                        topPill
+                        if showChat { chatBox }
                     }
                     Spacer()
                     leaderstats
@@ -56,10 +55,10 @@ struct PlayHUD: View {
                             .foregroundStyle(.primary)
                         }
                         Button { play.requestJump() } label: {
-                            Image(systemName: "arrow.up").font(.system(size: 30, weight: .bold))
-                                .frame(width: 84, height: 84)
-                                .background(.white.opacity(0.25), in: Circle())
-                                .overlay(Circle().stroke(.white.opacity(0.6), lineWidth: 2))
+                            Image(systemName: "chevron.up").font(.system(size: 34, weight: .semibold))
+                                .frame(width: 92, height: 92)
+                                .background(Color.black.opacity(0.3), in: Circle())
+                                .overlay(Circle().stroke(.white.opacity(0.85), lineWidth: 3))
                                 .foregroundStyle(.white)
                         }
                     }
@@ -68,6 +67,50 @@ struct PlayHUD: View {
                 .padding(.bottom, 24)
             }
         }
+    }
+
+    /// Roblox-style menu / chat / more pill.
+    private var topPill: some View {
+        HStack(spacing: 18) {
+            Menu {
+                Button("Stop Playtest", systemImage: "stop.fill", role: .destructive) { store.stopPlay() }
+            } label: {
+                Image(systemName: "square.fill").font(.system(size: 22)).rotationEffect(.degrees(15)).foregroundStyle(.white)
+            }
+            Rectangle().fill(.white.opacity(0.3)).frame(width: 1, height: 26)
+            Button { showChat.toggle() } label: {
+                Image(systemName: "bubble.left").font(.system(size: 22)).foregroundStyle(.white)
+            }
+            Menu {
+                Button(showChat ? "Hide Chat" : "Show Chat") { showChat.toggle() }
+                Button("Stop Playtest", role: .destructive) { store.stopPlay() }
+            } label: {
+                Image(systemName: "ellipsis").font(.system(size: 22, weight: .bold)).foregroundStyle(.white)
+            }
+        }
+        .padding(.horizontal, 20).frame(height: 50)
+        .background(Color.black.opacity(0.55), in: Capsule())
+    }
+
+    private var chatBox: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            ForEach(Array(play.chatLines.suffix(6).enumerated()), id: \.offset) { _, line in
+                (Text(line.0.isEmpty ? "" : line.0 + ": ").bold() + Text(line.1))
+                    .font(.system(size: 13)).foregroundStyle(.white).lineLimit(2)
+            }
+            TextField("", text: $chatText, prompt: Text("Chat '/?' or '/help' for a list of chat commands").foregroundStyle(.white.opacity(0.6)))
+                .font(.system(size: 13)).foregroundStyle(.white)
+                .onSubmit {
+                    let t = chatText.trimmingCharacters(in: .whitespaces)
+                    if !t.isEmpty { play.sendChat(t) }
+                    chatText = ""
+                }
+                .padding(.horizontal, 10).frame(height: 34)
+                .background(Color.black.opacity(0.35), in: RoundedRectangle(cornerRadius: 8))
+        }
+        .padding(10)
+        .frame(width: 330, alignment: .leading)
+        .background(Color.black.opacity(0.35), in: RoundedRectangle(cornerRadius: 10))
     }
 
     @ViewBuilder private var leaderstats: some View {

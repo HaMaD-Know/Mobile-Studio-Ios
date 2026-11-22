@@ -1,0 +1,31 @@
+// Generated from the Android PropertiesPanel category table.
+enum PropCategories {
+    static let order: [String] = ["Appearance", "Data", "Text", "Image", "Behavior", "Transform", "Pivot", "Collision", "Part", "Surface", "Assembly", "Playback", "Emitter", "Character", "Health", "Movement", "Rigging", "Camera", "Controls", "Mobile", "Shape", "Emission", "Motion", "Particles", "Light", "Scripting", "Model", "Physics", "Attachments", "Constraints", "Input", "Layout", "State", "Teams", "Game", "Other"]
+    static let map: [String: String] = {
+        var m: [String: String] = [:]
+        for k in ["BrickColor", "CastShadow", "Color", "Material", "MaterialVariant", "Reflectance", "Transparency", "BackgroundColor3", "BackgroundTransparency", "BorderColor3", "BorderMode", "BorderSizePixel", "Visible", "Texture", "Face", "Color3", "ZIndex", "TextureID", "DoubleSided", "RenderFidelity", "SmoothingAngle", "UsePartColor", "FillColor", "FillTransparency", "OutlineColor", "OutlineTransparency", "DepthMode", "LineThickness", "SurfaceColor3", "SurfaceTransparency", "StudsPerTileU", "StudsPerTileV", "OffsetStudsU", "OffsetStudsV", "LightInfluence", "Brightness", "Shadows", "Range", "Angle", "Thickness", "LineJoinMode", "CornerRadius", "Rotation", "Offset", "VertexColor", "Scale", "MeshType", "TextureId"] where m[k] == nil { m[k] = "Appearance" }
+        for k in ["ClassName", "Name", "Parent", "Source", "LinkedSource", "SoundId", "MeshId", "AnimationId", "Value", "Adornee", "PrimaryPart", "Part0", "Part1", "Attachment0", "Attachment1", "LayoutOrder", "SoundGroup", "TimeLength", "DisplayName", "Tags", "PlaceholderText", "Title", "Graphic", "ShirtTemplate", "PantsTemplate", "Tool", "ToolTip"] where m[k] == nil { m[k] = "Data" }
+        for k in ["Font", "FontFace", "LineHeight", "MaxVisibleGraphemes", "RichText", "Text", "TextColor3", "TextScaled", "TextSize", "TextStrokeColor3", "TextStrokeTransparency", "TextTransparency", "TextTruncate", "TextWrapped", "TextXAlignment", "TextYAlignment", "TextEditable", "ClearTextOnFocus", "MultiLine", "PlaceholderColor3", "ShowNativeInput"] where m[k] == nil { m[k] = "Text" }
+        for k in ["Image", "ImageColor3", "ImageRectOffset", "ImageRectSize", "ImageTransparency", "ResampleMode", "ScaleType", "SliceCenter", "SliceScale", "TileSize", "HoverImage", "PressedImage"] where m[k] == nil { m[k] = "Image" }
+        for k in ["Archivable", "Locked", "Active", "AutoButtonColor", "ClipsDescendants", "Draggable", "Interactable", "Selectable", "Disabled", "Enabled", "RunContext", "ResetOnSpawn", "IgnoreGuiInset", "ZIndexBehavior", "DisplayOrder", "AlwaysOnTop", "Modal", "Selected", "AutoLocalize", "ScreenInsets", "SafeAreaCompatibility", "CanBeDropped", "ManualActivationOnly", "RequiresHandle", "MaxActivationDistance", "HoldDuration", "KeyboardKeyCode", "ActionText", "ObjectText", "RequiresLineOfSight", "Exclusivity", "Style"] where m[k] == nil { m[k] = "Behavior" }
+        for k in ["Size", "Position", "Orientation", "CFrame", "AnchorPoint", "SizeConstraint", "AutomaticSize"] where m[k] == nil { m[k] = "Transform" }
+        for k in ["PivotOffset", "WorldPivot", "Pivot Offset", "Origin"] where m[k] == nil { m[k] = "Pivot" }
+        for k in ["CanCollide", "CanQuery", "CanTouch", "CollisionGroup", "CollisionGroupId", "CollisionFidelity", "AudioCanCollide"] where m[k] == nil { m[k] = "Collision" }
+        for k in ["Anchored", "CustomPhysicalProperties", "Massless", "RootPriority", "Shape", "EnableFluidForces", "FormFactor"] where m[k] == nil { m[k] = "Part" }
+        for k in ["BackSurface", "BottomSurface", "FrontSurface", "LeftSurface", "RightSurface", "TopSurface", "BackSurfaceInput", "BottomSurfaceInput", "FrontSurfaceInput", "LeftSurfaceInput", "RightSurfaceInput", "TopSurfaceInput"] where m[k] == nil { m[k] = "Surface" }
+        for k in ["AssemblyLinearVelocity", "AssemblyAngularVelocity", "Velocity", "RotVelocity"] where m[k] == nil { m[k] = "Assembly" }
+        for k in ["Looped", "PlaybackSpeed", "Playing", "TimePosition", "Volume", "PlayOnRemove", "PlaybackRegionsEnabled", "Pitch"] where m[k] == nil { m[k] = "Playback" }
+        for k in ["RollOffMaxDistance", "RollOffMinDistance", "RollOffMode", "EmitterSize", "MaxDistance", "MinDistance"] where m[k] == nil { m[k] = "Emitter" }
+        for k in ["Health", "MaxHealth", "BreakJointsOnDeath", "HealthDisplayDistance", "HealthDisplayType"] where m[k] == nil { m[k] = "Health" }
+        for k in ["WalkSpeed", "HipHeight", "MaxSlopeAngle", "AutoRotate", "AutoJumpEnabled", "JumpPower", "JumpHeight", "UseJumpPower", "PlatformStand", "Sit"] where m[k] == nil { m[k] = "Movement" }
+        for k in ["RigType", "RequiresNeck", "AutomaticScalingEnabled"] where m[k] == nil { m[k] = "Rigging" }
+        for k in ["CameraType", "FieldOfView", "FieldOfViewMode", "CameraSubject", "Focus", "HeadLocked", "HeadScale", "DiagonalFieldOfView", "MaxAxisFieldOfView"] where m[k] == nil { m[k] = "Camera" }
+        for k in ["Rate", "Lifetime", "Speed", "SpreadAngle", "EmissionDirection", "Drag", "Acceleration", "LockedToPart", "VelocityInheritance", "ZOffset", "Squash", "TimeScale"] where m[k] == nil { m[k] = "Emission" }
+        for k in ["Ambient", "OutdoorAmbient", "ClockTime", "GeographicLatitude", "TimeOfDay", "ExposureCompensation", "GlobalShadows", "FogColor", "FogEnd", "FogStart", "EnvironmentDiffuseScale", "EnvironmentSpecularScale", "ColorShift_Bottom", "ColorShift_Top", "Technology", "ShadowSoftness"] where m[k] == nil { m[k] = "Light" }
+        for k in ["Gravity", "FallenPartsDestroyHeight", "StreamingEnabled", "RespawnTime", "MaxPlayers", "CharacterAutoLoads"] where m[k] == nil { m[k] = "Game" }
+        for k in ["TeamColor", "AutoAssignable", "Neutral", "AllowTeamChangeOnTouch", "Duration"] where m[k] == nil { m[k] = "Teams" }
+        for k in ["Padding", "FillDirection", "HorizontalAlignment", "VerticalAlignment", "SortOrder", "CellSize", "CellPadding", "PaddingTop", "PaddingBottom", "PaddingLeft", "PaddingRight", "AspectRatio", "AspectType", "DominantAxis", "MinSize", "MaxSize", "Wraps"] where m[k] == nil { m[k] = "Layout" }
+        for k in ["LevelOfDetail", "ModelStreamingMode", "WorldPivotData"] where m[k] == nil { m[k] = "Model" }
+        return m
+    }()
+}

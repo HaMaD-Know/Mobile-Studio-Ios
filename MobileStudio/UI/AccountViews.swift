@@ -7,6 +7,7 @@ import StudioCore
 struct SettingsView: View {
     @ObservedObject var store: StudioStore
     @ObservedObject var account = AccountStore.shared
+    @ObservedObject var theme = ThemeStore.shared
     @State private var keyDraft = ""
     @State private var showSignIn = false
     @State private var showAbout = false
@@ -15,6 +16,19 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             Form {
+                Section {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 14) {
+                            ForEach(StudioTheme.builtIn) { t in ThemeTile(theme: t, selected: theme.current == t) { theme.current = t } }
+                        }
+                        .padding(.vertical, 4)
+                    }
+                } header: { Text("Appearance") }
+                Section("Camera") {
+                    Picker("Fly speed", selection: $store.flyMul) {
+                        ForEach(FlySpeeds.steps, id: \.self) { Text(FlySpeeds.label($0)).tag($0) }
+                    }
+                }
                 Section {
                     if account.isSignedIn {
                         LabeledContent("Signed in as", value: account.userName ?? "Roblox user")
@@ -62,7 +76,9 @@ struct SettingsView: View {
                     Button("About Mobile Studio") { showAbout = true }
                 }
             }
-            .navigationTitle("Settings")
+            .scrollContentBackground(.hidden)
+            .background(Th.panel)
+            .navigationTitle("Studio Settings")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
             .sheet(isPresented: $showSignIn) { SignInView() }
@@ -141,46 +157,99 @@ struct ToolboxView: View {
     @State private var error: String?
     @Environment(\.dismiss) private var dismiss
 
+    @State private var section = "Creator Store"
+
     var body: some View {
-        NavigationStack {
-            VStack(spacing: 0) {
-                Picker("Category", selection: $category) {
-                    ForEach(RobloxWeb.Category.allCases) { Text($0.label).tag($0) }
+        VStack(spacing: 0) {
+            HStack(spacing: 0) {
+                ForEach(["Creator Store", "Parts"], id: \.self) { t in
+                    Button { section = t } label: {
+                        Text(t).font(.system(size: 15)).foregroundStyle(section == t ? Th.text : Th.dim)
+                            .padding(.horizontal, 12).frame(height: 38)
+                            .background(section == t ? Th.panel : Color.clear)
+                    }
+                    .buttonStyle(.plain)
                 }
-                .pickerStyle(.segmented).padding(8)
-                if let error { Text(error).font(.footnote).foregroundStyle(.red).padding(8) }
-                ScrollView {
-                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 110), spacing: 10)], spacing: 10) {
-                        ForEach(items) { it in
-                            Button { insert(it) } label: {
-                                VStack(spacing: 4) {
-                                    AsyncImage(url: it.thumbnail) { img in img.resizable().scaledToFit() } placeholder: {
-                                        Color(.tertiarySystemFill)
-                                    }
-                                    .frame(width: 100, height: 100)
-                                    .clipShape(RoundedRectangle(cornerRadius: 8))
-                                    Text(it.name).font(.caption).lineLimit(2).multilineTextAlignment(.center)
-                                    Text(it.creator).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
-                                }
-                            }
-                            .foregroundStyle(.primary)
-                        }
-                        if cursor != nil && !loading {
-                            Button("More") { Task { await load(more: true) } }
+                Spacer()
+            }
+            .background(Th.header)
+            if section == "Parts" { partsGrid } else { store_ }
+        }
+        .background(Th.panel)
+        .task { await load(more: false) }
+    }
+
+    private var partsGrid: some View {
+        ScrollView {
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 96), spacing: 10)], spacing: 10) {
+                partTile("Block", "cube.fill") { store.insertPart(shape: 1) }
+                partTile("Sphere", "circle.fill") { store.insertPart(shape: 0) }
+                partTile("Cylinder", "cylinder.fill") { store.insertPart(shape: 2) }
+                partTile("Wedge", "triangle.fill") { store.insertPart(shape: 3) }
+                partTile("Corner", "pyramid.fill") { store.insertPart(shape: 4) }
+                partTile("Truss", "square.grid.3x3") { store.insertObject("TrussPart") }
+                partTile("Spawn", "flag.fill") { store.insertObject("SpawnLocation") }
+                partTile("MeshPart", "cube.transparent.fill") { store.insertObject("MeshPart") }
+            }
+            .padding(10)
+        }
+    }
+
+    private func partTile(_ name: String, _ icon: String, _ action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            VStack(spacing: 6) {
+                Image(systemName: icon).font(.system(size: 34)).foregroundStyle(Color(white: 0.8)).frame(height: 56)
+                Text(name).font(.system(size: 13)).foregroundStyle(Th.text)
+            }
+            .frame(maxWidth: .infinity).padding(.vertical, 10)
+            .background(Th.card, in: RoundedRectangle(cornerRadius: 8))
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var store_: some View {
+        VStack(spacing: 8) {
+            HStack(spacing: 6) {
+                TextField("", text: $query, prompt: Text("Search the Creator Store").foregroundStyle(Th.dim))
+                    .textInputAutocapitalization(.never).autocorrectionDisabled()
+                    .onSubmit { Task { await load(more: false) } }
+                    .studioField()
+                PanelIconButton(icon: "magnifyingglass") { Task { await load(more: false) } }
+            }
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    ForEach(RobloxWeb.Category.allCases) { c in
+                        Chip(label: c == .decals ? "Images" : c.label, selected: category == c) {
+                            category = c
+                            Task { await load(more: false) }
                         }
                     }
-                    .padding(10)
-                    if loading { ProgressView().padding() }
                 }
             }
-            .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always))
-            .onSubmit(of: .search) { Task { await load(more: false) } }
-            .onChange(of: category) { _, _ in Task { await load(more: false) } }
-            .task { await load(more: false) }
-            .navigationTitle("Toolbox")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } } }
+            if let error { Text(error).font(.system(size: 12)).foregroundStyle(Th.error) }
+            ScrollView {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 110), spacing: 10)], spacing: 10) {
+                    ForEach(items) { it in
+                        Button { insert(it) } label: {
+                            VStack(alignment: .leading, spacing: 4) {
+                                AsyncImage(url: it.thumbnail) { img in img.resizable().scaledToFit() } placeholder: { Th.hover }
+                                    .frame(maxWidth: .infinity).aspectRatio(1, contentMode: .fit)
+                                    .background(Th.card)
+                                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                                Text(it.name).font(.system(size: 12)).foregroundStyle(Th.text).lineLimit(2)
+                                Text(it.creator).font(.system(size: 11)).foregroundStyle(Th.dim).lineLimit(1)
+                            }
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    if cursor != nil && !loading {
+                        Chip(label: "More") { Task { await load(more: true) } }
+                    }
+                }
+                if loading { ProgressView().padding() }
+            }
         }
+        .padding(8)
     }
 
     private func load(more: Bool) async {
@@ -312,5 +381,41 @@ struct CloudPlacesView: View {
                 }
             } catch { message = error.localizedDescription }
         }
+    }
+}
+
+/// Mini preview of a theme (SettingsDialog's theme cards).
+struct ThemeTile: View {
+    let theme: StudioTheme
+    let selected: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            VStack(spacing: 6) {
+                ZStack(alignment: .topLeading) {
+                    Color(argb: theme.bg)
+                    VStack(alignment: .leading, spacing: 0) {
+                        Color(argb: theme.topbar).frame(height: 12)
+                            .overlay(alignment: .leading) { Color(argb: theme.accent).frame(width: 16, height: 5).padding(.leading, 6) }
+                        HStack(alignment: .top) {
+                            Spacer()
+                            VStack(alignment: .leading, spacing: 4) {
+                                Color(argb: theme.select).frame(width: 34, height: 8)
+                                Color(argb: theme.text).frame(width: 22, height: 3)
+                                Color(argb: theme.text).frame(width: 18, height: 3)
+                            }
+                            .padding(.top, 12).padding(.trailing, 6)
+                        }
+                    }
+                }
+                .frame(width: 110, height: 70)
+                .clipShape(RoundedRectangle(cornerRadius: 4))
+                .overlay(RoundedRectangle(cornerRadius: 6).stroke(selected ? Th.accent : Color.clear, lineWidth: 2.5).padding(-4))
+                Text(theme.name).font(.system(size: 13)).foregroundStyle(Th.text)
+            }
+            .padding(4)
+        }
+        .buttonStyle(.plain)
     }
 }
