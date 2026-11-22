@@ -186,6 +186,7 @@ public final class EditSession {
     public func insertObject(_ cls: String, into parent: Instance? = nil, at position: Vector3? = nil) -> Instance {
         var target = parent ?? selection.first ?? model.workspace
         let i = InstanceFactory.create(cls)
+        if cls == "SpawnLocation" { PlaceFactory.spawnDecal(i) }
         if i.isA("BasePart") {
             if let p = position { i.set("CFrame", .cframe(.at(p)), notify: false) }
             // Parts go into containers, never inside other parts.

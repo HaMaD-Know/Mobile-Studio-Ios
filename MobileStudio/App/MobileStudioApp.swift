@@ -143,10 +143,12 @@ struct StartScreen: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
                 hero
-                section("Start creating") {
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 14) {
-                            ForEach(PlaceFactory.Template.allCases) { t in templateCard(t) }
+                ForEach(templateSections, id: \.0) { title, items in
+                    section(title) {
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 14) {
+                                ForEach(items) { t in templateCard(t) }
+                            }
                         }
                     }
                 }
@@ -231,12 +233,24 @@ struct StartScreen: View {
         }
     }
 
+    private var templateSections: [(String, [PlaceFactory.Template])] {
+        let order = [("All Templates", "Start creating"), ("Gameplay", "Gameplay"), ("Theme", "Theme")]
+        return order.map { cat, title in
+            (title, PlaceFactory.Template.allCases.filter { $0.category == cat })
+        }
+    }
+
     private func templateCard(_ t: PlaceFactory.Template) -> some View {
         let look: (Int32, Int32, String) = {
             switch t {
-            case .baseplate: return (-10046495, -12693586, "cube.fill")
-            case .classic: return (-10831510, -13003960, "dice.fill")
-            case .empty: return (-9408400, -12566464, "square.dashed")
+            case .baseplate: return (-11764775, -13874857, "cube.fill")
+            case .classic: return (-11625902, -13667502, "dice.fill")
+            case .flatTerrain: return (-10580934, -12953048, "mountain.2.fill")
+            case .empty: return (-7704623, -11254976, "square.dashed")
+            case .obby: return (-2534577, -6933465, "flag.fill")
+            case .arena: return (-2061778, -6854116, "shield.lefthalf.filled")
+            case .island: return (-13660235, -15118744, "water.waves")
+            case .village: return (-7574971, -10996177, "house.fill")
             }
         }()
         return Button { store.newPlace(t) } label: {

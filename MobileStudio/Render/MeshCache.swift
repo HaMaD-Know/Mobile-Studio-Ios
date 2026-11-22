@@ -1,4 +1,5 @@
 import MetalKit
+import UIKit
 import simd
 import StudioCore
 
@@ -127,6 +128,16 @@ final class AssetTextures {
 
     func texture(for content: String, device: MTLDevice) -> MTLTexture? {
         if let t = cache[content] { return t }
+        if content.caseInsensitiveCompare(PlaceFactory.spawnDecalTexture) == .orderedSame {
+            let tex = makeSpawnTexture(device: device)
+            cache[content] = tex
+            return tex
+        }
+        if AssetCache.assetId(content) == 6372755229 {
+            let tex = makeGridTexture(device: device)
+            cache[content] = tex
+            return tex
+        }
         guard let data = AssetCache.shared.data(for: content) else {
             cache[content] = nil
             AssetCache.shared.fetch(content) { [weak self] url in
@@ -139,5 +150,55 @@ final class AssetTextures {
         let tex = try? loader?.newTexture(data: data, options: [.SRGB: false, .generateMipmaps: true])
         cache[content] = tex
         return tex
+    }
+
+    private func upload(_ img: UIImage, device: MTLDevice) -> MTLTexture? {
+        guard let cg = img.cgImage else { return nil }
+        if loader == nil { loader = MTKTextureLoader(device: device) }
+        return try? loader?.newTexture(cgImage: cg, options: [.SRGB: false, .generateMipmaps: true])
+    }
+
+    private func makeGridTexture(device: MTLDevice) -> MTLTexture? {
+        let fmt = UIGraphicsImageRendererFormat()
+        fmt.scale = 1
+        let img = UIGraphicsImageRenderer(size: CGSize(width: 256, height: 256), format: fmt).image { ctx in
+            let cg = ctx.cgContext
+            cg.setStrokeColor(UIColor.white.cgColor)
+            cg.setLineWidth(6)
+            cg.stroke(CGRect(x: 0, y: 0, width: 256, height: 256))
+        }
+        return upload(img, device: device)
+    }
+
+    private func makeSpawnTexture(device: MTLDevice) -> MTLTexture? {
+        let fmt = UIGraphicsImageRendererFormat()
+        fmt.scale = 1
+        let s: CGFloat = 256
+        let img = UIGraphicsImageRenderer(size: CGSize(width: s, height: s), format: fmt).image { ctx in
+            let cg = ctx.cgContext
+            cg.setAllowsAntialiasing(true)
+            // Outer and inner target rings.
+            cg.setStrokeColor(UIColor(argb: -654311425).cgColor)
+            cg.setLineWidth(0.055 * s)
+            cg.strokeEllipse(in: CGRect(x: s * 0.1, y: s * 0.1, width: s * 0.8, height: s * 0.8))
+            cg.setStrokeColor(UIColor(argb: -1862270977).cgColor)
+            cg.setLineWidth(0.02 * s)
+            cg.strokeEllipse(in: CGRect(x: s * 0.18, y: s * 0.18, width: s * 0.64, height: s * 0.64))
+            // Classic blocky spawn figure.
+            cg.setFillColor(UIColor(argb: -419430401).cgColor)
+            cg.fillEllipse(in: CGRect(x: s * 0.44, y: s * 0.25, width: s * 0.12, height: s * 0.12))
+            let r = s * 0.03
+            let rects = [
+                CGRect(x: 0.41 * s, y: 0.39 * s, width: 0.18 * s, height: 0.21 * s),
+                CGRect(x: 0.33 * s, y: 0.40 * s, width: 0.065 * s, height: 0.17 * s),
+                CGRect(x: 0.605 * s, y: 0.40 * s, width: 0.065 * s, height: 0.17 * s),
+                CGRect(x: 0.415 * s, y: 0.61 * s, width: 0.075 * s, height: 0.14 * s),
+                CGRect(x: 0.51 * s, y: 0.61 * s, width: 0.075 * s, height: 0.14 * s),
+            ]
+            for rect in rects {
+                UIBezierPath(roundedRect: rect, cornerRadius: r).fill()
+            }
+        }
+        return upload(img, device: device)
     }
 }

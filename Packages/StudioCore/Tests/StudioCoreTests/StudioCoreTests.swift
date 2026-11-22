@@ -113,4 +113,45 @@ final class StudioCoreTests: XCTestCase {
         let b: [UInt8] = [2, 127, 0x81, 0x86, 0xA0]
         XCTAssertEqual(try CsgMesh.decodeDeltaIndices(b, 0, b.count, 3), [2, 1, 100001])
     }
+
+    func testAllTemplates() throws {
+        for t in PlaceFactory.Template.allCases {
+            let dm = PlaceFactory.newPlace(t)
+            let ws = try XCTUnwrap(dm.findService("Workspace"))
+            let lighting = try XCTUnwrap(dm.findService("Lighting"))
+            if t == .classic {
+                XCTAssertEqual(lighting.get("Technology")?.asEnum, 1)
+                XCTAssertNil(lighting.findFirstChildOfClass("Atmosphere"))
+            } else {
+                XCTAssertEqual(lighting.get("Technology")?.asEnum, 3)
+                XCTAssertNotNil(lighting.findFirstChildOfClass("Atmosphere"))
+                XCTAssertNotNil(lighting.findFirstChildOfClass("BloomEffect"))
+            }
+            let spawns = ws.descendants().filter { $0.className == "SpawnLocation" }
+            XCTAssertFalse(spawns.isEmpty, "template \(t.title) has spawn")
+            for sp in spawns {
+                XCTAssertNotNil(sp.findFirstChildOfClass("Decal"), "spawn decal on \(t.title)")
+            }
+        }
+        let obby = PlaceFactory.newPlace(.obby)
+        XCTAssertNotNil(obby.workspace.findFirstChild("Obby"))
+        XCTAssertNotNil(obby.findService("ServerScriptService")?.findFirstChild("ObbyScript"))
+
+        let arena = PlaceFactory.newPlace(.arena)
+        XCTAssertEqual(arena.findService("Teams")?.children.count, 2)
+        XCTAssertNotNil(arena.findService("StarterPack")?.findFirstChild("Sword"))
+        XCTAssertEqual(arena.workspace.findFirstChild("Arena")?.children.filter { $0.name == "Cover" }.count, 20)
+
+        let flat = PlaceFactory.newPlace(.flatTerrain)
+        XCTAssertTrue(TerrainStore.hasVoxels(try XCTUnwrap(TerrainStore.terrainOf(flat))))
+
+        let island = PlaceFactory.newPlace(.island)
+        XCTAssertTrue(TerrainStore.hasVoxels(try XCTUnwrap(TerrainStore.terrainOf(island))))
+
+        let village = PlaceFactory.newPlace(.village)
+        let vm = try XCTUnwrap(village.workspace.findFirstChild("Village"))
+        XCTAssertEqual(vm.children.filter { $0.name.hasPrefix("House") }.count, 8)
+        XCTAssertEqual(vm.children.filter { $0.name == "Tree" }.count, 26)
+        XCTAssertNotNil(vm.findFirstChild("Well"))
+    }
 }
