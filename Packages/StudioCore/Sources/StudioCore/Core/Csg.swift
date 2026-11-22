@@ -171,9 +171,13 @@ public enum Csg {
                 let pl = node.plane!
                 var f: [Polygon] = []
                 var b: [Polygon] = []
+                var cf: [Polygon] = []
+                var cb: [Polygon] = []
                 for p in list {
-                    pl.split(p, coplanarFront: &node.polygons, coplanarBack: &node.polygons, front: &f, back: &b)
+                    pl.split(p, coplanarFront: &cf, coplanarBack: &cb, front: &f, back: &b)
                 }
+                if !cf.isEmpty { node.polygons.append(contentsOf: cf) }
+                if !cb.isEmpty { node.polygons.append(contentsOf: cb) }
                 if !b.isEmpty {
                     if node.back == nil { node.back = Node() }
                     node.back!.build(b)
