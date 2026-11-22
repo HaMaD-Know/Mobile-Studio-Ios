@@ -305,9 +305,15 @@ final class StudioStore: ObservableObject, TreeListener {
     var shownModel: DataModel { play?.dm ?? model }
 
     func renderParts() -> [Instance] {
-        if partsCacheStamp != Instance.changeCount {
-            partsCacheStamp = Instance.changeCount
-            partsCache = shownModel.workspace.descendants().filter { $0.isA("BasePart") && $0.className != "Terrain" }
+        let stamp = Instance.changeCount * 2 + (play == nil ? 0 : 1)
+        if partsCacheStamp != stamp {
+            partsCacheStamp = stamp
+            let playing = play != nil
+            partsCache = shownModel.workspace.descendants().filter {
+                $0.isA("BasePart") && $0.className != "Terrain"
+                    && !(playing && $0.className == "NegateOperation")
+                    && !SolidModeling.isHiddenSource($0)
+            }
         }
         return partsCache
     }
@@ -511,6 +517,53 @@ final class StudioStore: ObservableObject, TreeListener {
             }
             let name = ["R6", "R15", "Player Choice"][min(2, max(0, s.type))]
             log("Game Settings: avatar type \(name) (from the game on Roblox)")
+        }
+    }
+
+    // MARK: Solid Modeling (core/SolidModeling.kt)
+
+    func unionSelection() {
+        guard play == nil else { showToast("Stop the playtest first"); return }
+        if let err = SolidModeling.combine(session, intersect: false) {
+            showToast(err)
+        } else {
+            dirty = true
+            treeVersion += 1
+            showToast("Unioned parts")
+        }
+    }
+
+    func intersectSelection() {
+        guard play == nil else { showToast("Stop the playtest first"); return }
+        if let err = SolidModeling.combine(session, intersect: true) {
+            showToast(err)
+        } else {
+            dirty = true
+            treeVersion += 1
+            showToast("Intersected parts")
+        }
+    }
+
+    func negateSelection() {
+        guard play == nil else { showToast("Stop the playtest first"); return }
+        let n = SolidModeling.negate(session)
+        if n == 0 {
+            showToast("Select one or more parts to negate")
+        } else {
+            dirty = true
+            treeVersion += 1
+            showToast(n == 1 ? "Negated part" : "Negated \(n) parts")
+        }
+    }
+
+    func separateSelection() {
+        guard play == nil else { showToast("Stop the playtest first"); return }
+        if let err = SolidModeling.separate(session) {
+            showToast(err)
+        } else {
+            dirty = true
+            treeVersion += 1
+            showToast("Separated")
         }
     }
 

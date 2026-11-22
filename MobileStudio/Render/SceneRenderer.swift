@@ -207,12 +207,46 @@ final class SceneRenderer: NSObject, MTKViewDelegate {
             let cf = PartData.cframe(p), size = PartData.size(p)
             let material = PartData.material(p)
             let c = PartData.color(p)
+
+            if let csg = meshCache.unionDrawables(for: p) {
+                let usePartColor = p.get("UsePartColor")?.asBool == true
+                let model = cf.matrix(scale: csg.scale)
+                let tex = textures.names(for: material)
+                let tx = textures.textures(for: tex.key)
+                let colorTex = tex.color != nil ? tx.color : nil
+                let normalTex = tex.normal != nil ? tx.normal : nil
+                let texMode: Float = colorTex != nil ? 1 : 0
+                for sub in csg.items {
+                    let sc = usePartColor ? c : sub.style.color
+                    let st = max(t, sub.style.transparency)
+                    if st >= 0.999 { continue }
+                    let meshKey = sub.key + "|\(tex.key ?? "")"
+                    let inst = PartInstance(
+                        model: model, rotation: cf.rotationOnly.matrix(),
+                        color: SIMD4(sc.r, sc.g, sc.b, 1 - st), size: SIMD4(size.simd, 0),
+                        surfA: .zero, surfB: .zero,
+                        mat: MaterialTextures.params(material),
+                        extra: SIMD4(material == 288 ? 1 : 0, texMode, 1 / 8, normalTex != nil ? 1 : 0))
+                    if st > 0.001 {
+                        transparent[meshKey, default: Group(mesh: sub.mesh, color: colorTex, normal: normalTex, items: [])].items.append(inst)
+                    } else {
+                        opaque[meshKey, default: Group(mesh: sub.mesh, color: colorTex, normal: normalTex, items: [])].items.append(inst)
+                    }
+                }
+                continue
+            }
+
+            let isNegate = p.className == "NegateOperation"
+            let drawColor = isNegate ? c.lerp(Color3(0.92, 0.22, 0.22), 0.65) : c
+            let drawAlpha: Float = isNegate ? min(1 - t, 0.42) : (1 - t)
+            let drawTrans = isNegate || t > 0.001
+
             var model = cf.matrix(scale: size)
             var meshKey: String
             var mesh: GPUMesh
             var colorTex: MTLTexture?, normalTex: MTLTexture?
             var texMode: Float = 0
-            var surfaces = true
+            var surfaces = !isNegate
             if let custom = meshCache.drawable(for: p) {
                 mesh = custom.mesh
                 meshKey = custom.key
@@ -243,12 +277,12 @@ final class SceneRenderer: NSObject, MTKViewDelegate {
             }
             let inst = PartInstance(
                 model: model, rotation: cf.rotationOnly.matrix(),
-                color: SIMD4(c.r, c.g, c.b, 1 - t), size: SIMD4(size.simd, 0),
+                color: SIMD4(drawColor.r, drawColor.g, drawColor.b, drawAlpha), size: SIMD4(size.simd, 0),
                 surfA: surfaces ? SIMD4(surf(p, "RightSurface"), surf(p, "TopSurface"), surf(p, "BackSurface"), 0) : .zero,
                 surfB: surfaces ? SIMD4(surf(p, "LeftSurface"), surf(p, "BottomSurface"), surf(p, "FrontSurface"), 0) : .zero,
                 mat: MaterialTextures.params(material),
                 extra: SIMD4(material == 288 ? 1 : 0, texMode, 1 / 8, normalTex != nil ? 1 : 0))
-            if t > 0.001 {
+            if drawTrans {
                 transparent[meshKey, default: Group(mesh: mesh, color: colorTex, normal: normalTex, items: [])].items.append(inst)
             } else {
                 opaque[meshKey, default: Group(mesh: mesh, color: colorTex, normal: normalTex, items: [])].items.append(inst)

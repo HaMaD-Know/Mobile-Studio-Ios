@@ -150,6 +150,12 @@ struct RibbonView: View {
             RibbonButton(icon: "square.grid.3x3", tint: Color(argb: -3355444), label: "Truss") { store.insertObject("TrussPart") }
             RibbonButton(icon: "flag.fill", tint: Th.play, label: "Spawn") { store.insertObject("SpawnLocation") }
         }
+        RibbonGroup(caption: "Solid Modeling") {
+            RibbonButton(icon: "plus.square.on.square", tint: Th.info, label: "Union") { store.unionSelection() }
+            RibbonButton(icon: "square.on.square.intersection.dashed", tint: Th.info, label: "Intersect") { store.intersectSelection() }
+            RibbonButton(icon: "minus.square.fill", tint: Th.error, label: "Negate") { store.negateSelection() }
+            RibbonButton(icon: "square.on.square.dashed", tint: Th.warn, label: "Separate") { store.separateSelection() }
+        }
         RibbonGroup(caption: "Appearance") {
             RibbonButton(icon: "paintpalette.fill", tint: Th.warn, label: "Color") { modal = .colors }
             materialMenu

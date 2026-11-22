@@ -154,4 +154,50 @@ final class StudioCoreTests: XCTestCase {
         XCTAssertEqual(vm.children.filter { $0.name == "Tree" }.count, 26)
         XCTAssertNotNil(vm.findFirstChild("Well"))
     }
+
+    func testSolidModeling() throws {
+        let s = EditSession(model: PlaceFactory.newPlace(.empty))
+        let a = s.insertPart(shape: 1, at: Vector3(0, 2, 0))
+        a.set("size", .vector3(Vector3(4, 4, 4)), notify: false)
+        let b = s.insertPart(shape: 1, at: Vector3(2, 2, 0))
+        b.set("size", .vector3(Vector3(4, 4, 4)), notify: false)
+
+        // Negate b, then union (a - b) -> carved block.
+        s.select([b])
+        XCTAssertEqual(SolidModeling.negate(s), 1)
+        let neg = try XCTUnwrap(s.selection.first)
+        XCTAssertEqual(neg.className, "NegateOperation")
+
+        s.select([a, neg])
+        XCTAssertNil(SolidModeling.combine(s, intersect: false))
+        let op = try XCTUnwrap(s.selection.first)
+        XCTAssertEqual(op.className, "UnionOperation")
+        XCTAssertTrue(SolidModeling.canSeparate(op))
+        XCTAssertTrue(SolidModeling.isHiddenSource(a))
+        let res = try XCTUnwrap(SolidModeling.result(op))
+        XCTAssertFalse(res.polys.isEmpty)
+        XCTAssertFalse(res.tris.isEmpty)
+        // Result of [−2, 2] minus [0, 4] along X should be 2 studs wide on X.
+        XCTAssertEqual(res.initialSize.x, 2, accuracy: 0.05)
+        XCTAssertEqual(res.initialSize.y, 4, accuracy: 0.05)
+
+        // Separate restores both parts and removes the UnionOperation.
+        XCTAssertNil(SolidModeling.separate(s))
+        XCTAssertNil(op.parent)
+        XCTAssertEqual(s.selection.count, 2)
+
+        // Intersect of two overlapping cubes -> 2×4×4 overlap box.
+        s.select([neg])
+        XCTAssertEqual(SolidModeling.negate(s), 1)
+        let bBack = try XCTUnwrap(s.selection.first)
+        XCTAssertEqual(bBack.className, "Part")
+        s.select([a, bBack])
+        XCTAssertNil(SolidModeling.combine(s, intersect: true))
+        let inter = try XCTUnwrap(s.selection.first)
+        XCTAssertEqual(inter.className, "IntersectOperation")
+        let interRes = try XCTUnwrap(SolidModeling.result(inter))
+        XCTAssertEqual(interRes.initialSize.x, 2, accuracy: 0.05)
+        XCTAssertEqual(interRes.initialSize.y, 4, accuracy: 0.05)
+        XCTAssertEqual(interRes.initialSize.z, 4, accuracy: 0.05)
+    }
 }

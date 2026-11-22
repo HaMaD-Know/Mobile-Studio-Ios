@@ -47,7 +47,9 @@ final class PhysicsWorld {
         dirty = false
         bodies.removeAll(); bodyOf.removeAll(); joints.removeAll(); solveOrder.removeAll(); partsById.removeAll(); grid.removeAll(); gridOf.removeAll()
         characterParts = Set(character?.descendants().filter { $0.isA("BasePart") }.map(ObjectIdentifier.init) ?? [])
-        let parts = ws.descendants().filter { $0.isA("BasePart") && $0.className != "Terrain" }
+        let parts = ws.descendants().filter {
+            $0.isA("BasePart") && $0.className != "Terrain" && $0.className != "NegateOperation" && !SolidModeling.isHiddenSource($0)
+        }
         terrain = ws.findFirstChildOfClass("Terrain")
         terrainGrid = terrain.flatMap { TerrainStore.hasVoxels($0) ? TerrainStore.of($0) : nil }
         for p in parts { partsById[ObjectIdentifier(p)] = p; insertGrid(p) }

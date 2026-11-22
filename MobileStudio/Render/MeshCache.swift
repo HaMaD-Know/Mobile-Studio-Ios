@@ -21,6 +21,34 @@ final class MeshCache {
 
     private var clothes: [String: GPUMesh] = [:]
 
+    struct UnionSubmesh {
+        let key: String
+        let mesh: GPUMesh
+        let style: SolidModeling.Style
+    }
+    private var unionCache: [ObjectIdentifier: (sig: Int64, items: [UnionSubmesh])] = [:]
+
+    /// Submeshes for a UnionOperation / IntersectOperation built with SolidModeling.
+    func unionDrawables(for op: Instance) -> (items: [UnionSubmesh], scale: Vector3)? {
+        guard SolidModeling.isOperation(op), let device, let r = SolidModeling.result(op) else { return nil }
+        let id = ObjectIdentifier(op)
+        let sc = SolidModeling.scaleOf(op, r)
+        if let e = unionCache[id], e.sig == r.sig { return (e.items, sc) }
+        var items: [UnionSubmesh] = []
+        for (styleIdx, verts) in r.tris.sorted(by: { $0.key < $1.key }) {
+            guard !verts.isEmpty,
+                  let buf = device.makeBuffer(bytes: verts, length: verts.count * 4, options: .storageModeShared) else { continue }
+            let mesh = GPUMesh(buffer: buf, vertexCount: verts.count / 8, primitive: .triangle)
+            let style = styleIdx >= 0 && styleIdx < r.styles.count
+                ? r.styles[styleIdx]
+                : SolidModeling.Style(color: PartData.color(op), transparency: PartData.transparency(op))
+            items.append(UnionSubmesh(key: "csg:\(id.hashValue):\(r.sig):\(styleIdx)", mesh: mesh, style: style))
+        }
+        unionCache[id] = (r.sig, items)
+        if unionCache.count > 128 { unionCache.removeAll() }
+        return (items, sc)
+    }
+
     /// R6 body parts wearing a Shirt / Pants draw with the clothing template.
     private func clothing(for p: Instance) -> Drawable? {
         guard let ch = p.parent, ch.isA("Model"), let device else { return nil }
