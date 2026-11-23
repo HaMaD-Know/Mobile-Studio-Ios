@@ -458,7 +458,7 @@ final class StudioStore: ObservableObject, TreeListener {
         let ambMix = oaV * 0.6 + amV * 0.4 + SIMD3(repeating: 0.08)
         let avgAmb = max(0.15, (ambMix.x + ambMix.y + ambMix.z) / 3)
         let ambientTint = simd_clamp(ambMix / avgAmb, SIMD3(repeating: 0.45), SIMD3(repeating: 1.65))
-        let exposure = pow(2, expComp)
+        let exposure = powf(2, expComp)
 
         let dayZenith = SIMD3<Float>(0.30, 0.54, 0.90)
         let dayHorizon = SIMD3<Float>(0.76, 0.86, 0.96)

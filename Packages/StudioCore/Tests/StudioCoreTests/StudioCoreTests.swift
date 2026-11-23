@@ -250,7 +250,7 @@ final class StudioCoreTests: XCTestCase {
             InstanceFactory.create("ScreenGui"),
             InstanceFactory.create("MaterialVariant"),
             InstanceFactory.create("Part"),
-        ], warnings: [])
+        ], meta: OrderedDict(), warnings: [])
         s.insertDocument(doc)
         XCTAssertEqual(doc.roots[0].parent?.className, "Lighting")
         XCTAssertEqual(doc.roots[1].parent?.className, "Lighting")

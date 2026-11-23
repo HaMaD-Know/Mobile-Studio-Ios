@@ -321,10 +321,13 @@ struct ToolboxView: View {
         error = nil; needsAuth = false
         func handleAuthError(_ err: Error) {
             statusBanner = nil
-            if case AssetCache.AssetError.authRequired = err {
+            switch err {
+            case AssetCache.AssetError.authRequired,
+                 AssetCache.AssetError.http(401),
+                 AssetCache.AssetError.http(403):
                 self.error = "Sign in to Roblox to insert \(it.name)."
                 self.needsAuth = true
-            } else {
+            default:
                 self.error = "Couldn't insert \(it.name): \(err.localizedDescription)"
             }
         }
