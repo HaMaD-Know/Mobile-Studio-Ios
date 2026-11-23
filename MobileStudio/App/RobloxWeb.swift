@@ -119,10 +119,11 @@ enum RobloxWeb {
         }
     }
 
-    struct Item: Identifiable { let id: Int64; let name: String; let creator: String; var thumbnail: URL? }
+    struct Item: Identifiable { let id: Int64; let name: String; let creator: String; var verified: Bool = false; var thumbnail: URL? }
 
-    static func search(_ keyword: String, _ cat: Category, cursor: String? = nil) async throws -> ([Item], String?) {
+    static func search(_ keyword: String, _ cat: Category, cursor: String? = nil, freeOnly: Bool = false) async throws -> ([Item], String?) {
         var url = "https://apis.roblox.com/toolbox-service/v1/marketplace/\(cat.rawValue)?num=30&includeOnlyVerifiedCreators=false"
+        if freeOnly { url += "&minPrice=0&maxPrice=0" }
         let k = keyword.trimmingCharacters(in: .whitespaces)
         if !k.isEmpty { url += "&keyword=" + (k.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? "") }
         if let cursor { url += "&cursor=" + (cursor.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? "") }
@@ -141,8 +142,10 @@ enum RobloxWeb {
         return (j["data"] as? [[String: Any]] ?? []).compactMap { d in
             let asset = d["asset"] as? [String: Any] ?? [:]
             guard let id = (asset["id"] as? NSNumber)?.int64Value else { return nil }
-            let creator = (d["creator"] as? [String: Any])?["name"] as? String ?? ""
-            return Item(id: id, name: asset["name"] as? String ?? "Asset \(id)", creator: creator, thumbnail: nil)
+            let creatorObj = d["creator"] as? [String: Any]
+            let creator = creatorObj?["name"] as? String ?? ""
+            let verified = creatorObj?["isVerifiedCreator"] as? Bool ?? false
+            return Item(id: id, name: asset["name"] as? String ?? "Asset \(id)", creator: creator, verified: verified, thumbnail: nil)
         }
     }
 

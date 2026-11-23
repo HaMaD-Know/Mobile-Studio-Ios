@@ -38,6 +38,9 @@ public enum InstanceFactory {
         } else if ClassDb.isA(cls, "Light") {
             s("Brightness", .float(1)); s("Color", .color3(Color3(1, 1, 1))); s("Range", .float(8))
             s("Enabled", .bool(true)); s("Shadows", .bool(false))
+            if cls == "SpotLight" || cls == "SurfaceLight" {
+                s("Angle", .float(90)); s("Face", .enumValue(EnumValue(5)))
+            }
         } else if cls == "StringValue" { s("Value", .string(""))
         } else if cls == "IntValue" { s("Value", .int64(0))
         } else if cls == "NumberValue" { s("Value", .double(0))
@@ -70,8 +73,14 @@ public enum InstanceFactory {
         } else if cls == "Camera" {
             s("CFrame", .cframe(.identity)); s("FieldOfView", .float(70)); s("CameraType", .enumValue(EnumValue(0)))
         } else if cls == "Lighting" {
-            s("ClockTime", .float(14)); s("Brightness", .float(2))
+            s("ClockTime", .float(14)); s("TimeOfDay", .string("14:00:00")); s("Brightness", .float(2))
             s("Ambient", .color3(.fromRGB(70, 70, 70))); s("OutdoorAmbient", .color3(.fromRGB(128, 128, 128)))
+            s("ColorShift_Top", .color3(.fromRGB(0, 0, 0))); s("ColorShift_Bottom", .color3(.fromRGB(0, 0, 0)))
+            s("ExposureCompensation", .float(0))
+            s("EnvironmentDiffuseScale", .float(1)); s("EnvironmentSpecularScale", .float(1))
+            s("GeographicLatitude", .float(41.733))
+            s("GlobalShadows", .bool(true)); s("ShadowSoftness", .float(0.2))
+            s("FogColor", .color3(.fromRGB(192, 192, 192))); s("FogStart", .float(0)); s("FogEnd", .float(100000))
         } else if cls == "Workspace" {
             s("Gravity", .float(196.2)); s("FallenPartsDestroyHeight", .float(-500))
         } else if cls == "Players" {
@@ -145,8 +154,8 @@ public enum PartData {
     public static func content(_ p: Instance, _ keys: String...) -> String? {
         for k in keys {
             guard let v = p.get(k) else { continue }
-            let s = v.description
-            if !s.trimmingCharacters(in: .whitespaces).isEmpty { return s }
+            let s = (v.asURI ?? v.description).trimmingCharacters(in: .whitespaces)
+            if !s.isEmpty { return s }
         }
         return nil
     }
@@ -154,15 +163,17 @@ public enum PartData {
     public static func textureContent(_ p: Instance) -> String? { content(p, "TextureID", "TextureId", "TextureContent") }
 
     public static func shape(_ p: Instance) -> Shape {
+        if let mesh = p.children.first(where: { $0.className == "SpecialMesh" }) {
+            switch mesh.get("MeshType")?.asEnum {
+            case 0, 4: return .cylinder
+            case 2: return .wedge
+            case 3: return .ball
+            default: return .block
+            }
+        }
         if p.className == "WedgePart" { return .wedge }
         if p.className == "CornerWedgePart" { return .cornerWedge }
         if let v = (p.get("shape") ?? p.get("Shape"))?.asEnum { return Shape(rawValue: Int(v)) ?? .block }
-        if let mesh = p.children.first(where: { $0.className == "SpecialMesh" }) {
-            let t = mesh.get("MeshType")?.asEnum
-            if t == 3 { return .ball }
-            if t == 2 { return .wedge }
-            return .block
-        }
         return .block
     }
 

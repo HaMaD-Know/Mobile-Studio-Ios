@@ -200,4 +200,78 @@ final class StudioCoreTests: XCTestCase {
         XCTAssertEqual(interRes.initialSize.y, 4, accuracy: 0.05)
         XCTAssertEqual(interRes.initialSize.z, 4, accuracy: 0.05)
     }
+
+    func testLightingDefaultsSyncAndDocumentRouting() throws {
+        let l = InstanceFactory.create("Lighting")
+        for key in ["ClockTime", "TimeOfDay", "Brightness", "Ambient", "OutdoorAmbient",
+                    "ExposureCompensation", "FogStart", "FogEnd", "FogColor", "GlobalShadows", "GeographicLatitude"] {
+            XCTAssertNotNil(l.get(key), "Lighting missing default \(key)")
+        }
+
+        let sky = InstanceFactory.create("Sky")
+        for face in ["SkyboxFt", "SkyboxBk", "SkyboxRt", "SkyboxLf", "SkyboxUp", "SkyboxDn"] {
+            XCTAssertNotNil(sky.get(face), "Sky missing default \(face)")
+        }
+
+        let spot = InstanceFactory.create("SpotLight")
+        XCTAssertNotNil(spot.get("Angle"))
+        XCTAssertNotNil(spot.get("Face"))
+        let surf = InstanceFactory.create("SurfaceLight")
+        XCTAssertNotNil(surf.get("Angle"))
+        XCTAssertNotNil(surf.get("Face"))
+
+        // ClockTime <-> TimeOfDay and BrickColor <-> Color3uint8 syncing with atomic undo.
+        let s = EditSession(model: PlaceFactory.newPlace(.empty))
+        let lighting = s.model.getService("Lighting")
+        s.setProp(lighting, "ClockTime", .float(18.5))
+        XCTAssertEqual(lighting.get("TimeOfDay")?.asString, "18:30:00")
+        s.setProp(lighting, "TimeOfDay", .string("06:15:00"))
+        XCTAssertEqual(lighting.get("ClockTime")?.asFloat ?? 0, 6.25, accuracy: 1e-4)
+        s.undo.undo()
+        XCTAssertEqual(lighting.get("ClockTime")?.asFloat ?? 0, 18.5, accuracy: 1e-4)
+        XCTAssertEqual(lighting.get("TimeOfDay")?.asString, "18:30:00")
+
+        let part = s.insertPart(shape: 1, at: .zero)
+        s.setProp(part, "BrickColor", .brickColor(BrickColorV(21)))
+        XCTAssertEqual(part.get("Color3uint8")?.asColor3, BrickColors.color(21))
+        let blue = Color3.fromRGB(0, 85, 255)
+        s.setProp(part, "Color3uint8", .color3(blue))
+        if case .brickColor(let bc)? = part.get("BrickColor") {
+            XCTAssertEqual(Int(bc.number), BrickColors.closest(blue))
+        } else {
+            XCTFail("Expected BrickColor to sync from Color3uint8")
+        }
+
+        // Document routing into appropriate services when parent is omitted.
+        let doc = RbxDocument(roots: [
+            InstanceFactory.create("Sky"),
+            InstanceFactory.create("Atmosphere"),
+            InstanceFactory.create("BloomEffect"),
+            InstanceFactory.create("ScreenGui"),
+            InstanceFactory.create("MaterialVariant"),
+            InstanceFactory.create("Part"),
+        ], warnings: [])
+        s.insertDocument(doc)
+        XCTAssertEqual(doc.roots[0].parent?.className, "Lighting")
+        XCTAssertEqual(doc.roots[1].parent?.className, "Lighting")
+        XCTAssertEqual(doc.roots[2].parent?.className, "Lighting")
+        XCTAssertEqual(doc.roots[3].parent?.className, "StarterGui")
+        XCTAssertEqual(doc.roots[4].parent?.className, "MaterialService")
+        XCTAssertEqual(doc.roots[5].parent?.className, "Workspace")
+
+        // SpecialMesh shape mapping.
+        let meshPart = InstanceFactory.create("Part")
+        let sm = InstanceFactory.create("SpecialMesh")
+        sm.attachRaw(meshPart)
+        sm.set("MeshType", .enumValue(EnumValue(0)))
+        XCTAssertEqual(PartData.shape(meshPart), .cylinder)
+        sm.set("MeshType", .enumValue(EnumValue(2)))
+        XCTAssertEqual(PartData.shape(meshPart), .wedge)
+        sm.set("MeshType", .enumValue(EnumValue(3)))
+        XCTAssertEqual(PartData.shape(meshPart), .ball)
+        sm.set("MeshType", .enumValue(EnumValue(4)))
+        XCTAssertEqual(PartData.shape(meshPart), .cylinder)
+        sm.set("MeshType", .enumValue(EnumValue(6)))
+        XCTAssertEqual(PartData.shape(meshPart), .block)
+    }
 }

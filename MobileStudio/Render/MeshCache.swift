@@ -149,35 +149,149 @@ final class MeshCache {
     }
 }
 
-/// Textures downloaded from asset ids (MeshPart TextureID, Decals...).
+/// Textures downloaded from asset ids (MeshPart TextureID, Decals, Skyboxes...).
 final class AssetTextures {
-    private var cache: [String: MTLTexture?] = [:]
+    private var textures: [String: MTLTexture] = [:]
+    private var inFlight: Set<String> = []
+    private var failedAt: [String: CFAbsoluteTime] = [:]
     private var loader: MTKTextureLoader?
 
+    @MainActor
     func texture(for content: String, device: MTLDevice) -> MTLTexture? {
-        if let t = cache[content] { return t }
-        if content.caseInsensitiveCompare(PlaceFactory.spawnDecalTexture) == .orderedSame {
-            let tex = makeSpawnTexture(device: device)
-            cache[content] = tex
-            return tex
-        }
-        if AssetCache.assetId(content) == 6372755229 {
-            let tex = makeGridTexture(device: device)
-            cache[content] = tex
-            return tex
-        }
-        guard let data = AssetCache.shared.data(for: content) else {
-            cache[content] = nil
-            AssetCache.shared.fetch(content) { [weak self] url in
-                if url != nil { self?.cache.removeValue(forKey: content); Instance.changeCount += 1 }
+        let key = content.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !key.isEmpty else { return nil }
+        if key.caseInsensitiveCompare(PlaceFactory.spawnDecalTexture) == .orderedSame {
+            if let cached = textures[key] { return cached }
+            if let tex = makeSpawnTexture(device: device) {
+                textures[key] = tex
+                return tex
             }
-            cache[content] = .some(nil)
             return nil
         }
+        if key.hasPrefix("rbxasset://") { return nil }
+        guard let id = AssetCache.assetId(key) else { return nil }
+        if id == 6372755229 {
+            if let cached = textures[key] { return cached }
+            if let tex = makeGridTexture(device: device) {
+                textures[key] = tex
+                return tex
+            }
+            return nil
+        }
+        if let tex = textures[key] { return tex }
+        if inFlight.contains(key) { return nil }
+        if let failed = failedAt[key], CFAbsoluteTimeGetCurrent() - failed < 15 { return nil }
+
+        inFlight.insert(key)
+        Task { @MainActor [weak self] in
+            let bytes = await Task.detached(priority: .utility) {
+                await Self.fetchImageBytes(id: id, key: key, depth: 0)
+            }.value
+            guard let self else { return }
+            self.inFlight.remove(key)
+            if let bytes, let tex = self.decodeTexture(data: bytes, device: device) {
+                self.textures[key] = tex
+                self.failedAt.removeValue(forKey: key)
+                Instance.changeCount += 1
+            } else {
+                self.failedAt[key] = CFAbsoluteTimeGetCurrent()
+            }
+        }
+        return nil
+    }
+
+    private func decodeTexture(data: Data, device: MTLDevice) -> MTLTexture? {
         if loader == nil { loader = MTKTextureLoader(device: device) }
-        let tex = try? loader?.newTexture(data: data, options: [.SRGB: false, .generateMipmaps: true])
-        cache[content] = tex
-        return tex
+        if let tex = try? loader?.newTexture(data: data, options: [.SRGB: false, .generateMipmaps: true]) {
+            return tex
+        }
+        if let img = UIImage(data: data), let cg = img.cgImage {
+            return try? loader?.newTexture(cgImage: cg, options: [.SRGB: false, .generateMipmaps: true])
+        }
+        return nil
+    }
+
+    private static var diskDir: URL {
+        let base = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+        let dir = base.appendingPathComponent("img", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }
+
+    private static func diskURL(for id: Int64) -> URL {
+        diskDir.appendingPathComponent("\(id).img")
+    }
+
+    private static func isDecodableImage(_ data: Data) -> Bool {
+        UIImage(data: data) != nil
+    }
+
+    private static func unwrapImageId(from data: Data, originalId: Int64) -> Int64? {
+        guard let doc = try? RbxFile.read(data) else { return nil }
+        let propNames = ["Texture", "TextureId", "ShirtTemplate", "PantsTemplate", "Graphic", "ColorMap", "SkyboxFt"]
+        var stack = doc.roots
+        while !stack.isEmpty {
+            let inst = stack.removeFirst()
+            for prop in propNames {
+                if let uri = inst.get(prop)?.asURI,
+                   let inner = AssetCache.assetId(uri),
+                   inner != originalId {
+                    return inner
+                }
+            }
+            stack.append(contentsOf: inst.children)
+        }
+        return nil
+    }
+
+    private static func fetchThumbnailBytes(id: Int64) async -> Data? {
+        let thumbURL = "https://thumbnails.roblox.com/v1/assets?assetIds=\(id)&returnPolicy=PlaceHolder&size=420x420&format=Png&isCircular=false"
+        guard let url = URL(string: thumbURL),
+              let (metaData, resp) = try? await URLSession.shared.data(from: url),
+              (resp as? HTTPURLResponse)?.statusCode == 200,
+              let obj = try? JSONSerialization.jsonObject(with: metaData) as? [String: Any],
+              let list = obj["data"] as? [[String: Any]],
+              let first = list.first,
+              (first["state"] as? String) == "Completed",
+              let imageUrlStr = first["imageUrl"] as? String,
+              let imgUrl = URL(string: imageUrlStr),
+              let (imgBytes, imgResp) = try? await URLSession.shared.data(from: imgUrl),
+              (imgResp as? HTTPURLResponse)?.statusCode == 200,
+              isDecodableImage(imgBytes) else {
+            return nil
+        }
+        return imgBytes
+    }
+
+    private static func fetchImageBytes(id: Int64, key: String, depth: Int) async -> Data? {
+        if depth > 2 { return nil }
+        let cacheFile = diskURL(for: id)
+        if let cached = try? Data(contentsOf: cacheFile), isDecodableImage(cached) {
+            return cached
+        }
+        // Check local .bin cache or download raw asset (preserves full-res images & unwraps Decal/Shirt .rbxm wrappers).
+        let raw: Data? = if let local = AssetCache.shared.data(for: key), !local.isEmpty {
+            local
+        } else {
+            try? await AssetCache.shared.download(id)
+        }
+        if let raw, !raw.isEmpty {
+            if isDecodableImage(raw) {
+                try? raw.write(to: cacheFile, options: .atomic)
+                return raw
+            }
+            if let innerId = unwrapImageId(from: raw, originalId: id),
+               let nested = await fetchImageBytes(id: innerId, key: "rbxassetid://\(innerId)", depth: depth + 1) {
+                try? nested.write(to: cacheFile, options: .atomic)
+                return nested
+            }
+        }
+        // Fallback to Roblox Thumbnail API (works unauthenticated and handles wrapped/TGA textures).
+        if let thumb = await fetchThumbnailBytes(id: id) {
+            try? thumb.write(to: cacheFile, options: .atomic)
+            return thumb
+        }
+        return nil
     }
 
     private func upload(_ img: UIImage, device: MTLDevice) -> MTLTexture? {

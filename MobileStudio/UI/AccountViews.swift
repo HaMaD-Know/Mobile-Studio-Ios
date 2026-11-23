@@ -155,6 +155,10 @@ struct ToolboxView: View {
     @State private var cursor: String?
     @State private var loading = false
     @State private var error: String?
+    @State private var freeOnly = false
+    @State private var needsAuth = false
+    @State private var showSignIn = false
+    @State private var statusBanner: String?
     @State private var audioSearchTrigger = 0
     @Environment(\.dismiss) private var dismiss
 
@@ -177,6 +181,7 @@ struct ToolboxView: View {
             if section == "Parts" { partsGrid } else { store_ }
         }
         .background(Th.panel)
+        .sheet(isPresented: $showSignIn) { SignInView() }
         .task { await load(more: false) }
     }
 
@@ -234,6 +239,13 @@ struct ToolboxView: View {
                             }
                         }
                     }
+                    if category != .audio {
+                        Divider().frame(height: 18)
+                        Chip(label: "Free", selected: freeOnly) {
+                            freeOnly.toggle()
+                            Task { await load(more: false) }
+                        }
+                    }
                 }
             }
             if category == .audio {
@@ -242,10 +254,26 @@ struct ToolboxView: View {
                     let s = store.session.insertObject("Sound", into: target)
                     s.name = item.title.isEmpty ? item.name : item.title
                     s.set("SoundId", .string("rbxassetid://\(item.id)"))
+                    statusBanner = "Inserted \(s.name)"
                     store.showToast("Inserted \(s.name)")
                 }
             } else {
-                if let error { Text(error).font(.system(size: 12)).foregroundStyle(Th.error) }
+                if let statusBanner {
+                    Text(statusBanner)
+                        .font(.system(size: 12))
+                        .foregroundStyle(Th.accent)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                if let error {
+                    HStack(spacing: 8) {
+                        Text(error).font(.system(size: 12)).foregroundStyle(Th.error)
+                        if needsAuth {
+                            Button("Sign In") { showSignIn = true }
+                                .font(.system(size: 12, weight: .semibold))
+                        }
+                        Spacer()
+                    }
+                }
                 ScrollView {
                     LazyVGrid(columns: [GridItem(.adaptive(minimum: 110), spacing: 10)], spacing: 10) {
                         ForEach(items) { it in
@@ -256,7 +284,14 @@ struct ToolboxView: View {
                                         .background(Th.card)
                                         .clipShape(RoundedRectangle(cornerRadius: 6))
                                     Text(it.name).font(.system(size: 12)).foregroundStyle(Th.text).lineLimit(2)
-                                    Text(it.creator).font(.system(size: 11)).foregroundStyle(Th.dim).lineLimit(1)
+                                    HStack(spacing: 3) {
+                                        Text(it.creator).font(.system(size: 11)).foregroundStyle(Th.dim).lineLimit(1)
+                                        if it.verified {
+                                            Image(systemName: "checkmark.seal.fill")
+                                                .font(.system(size: 10))
+                                                .foregroundStyle(Th.accent)
+                                        }
+                                    }
                                 }
                             }
                             .buttonStyle(.plain)
@@ -273,50 +308,107 @@ struct ToolboxView: View {
     }
 
     private func load(more: Bool) async {
-        loading = true; error = nil
+        loading = true; error = nil; needsAuth = false
         defer { loading = false }
         do {
-            let (found, next) = try await RobloxWeb.search(query, category, cursor: more ? cursor : nil)
+            let (found, next) = try await RobloxWeb.search(query, category, cursor: more ? cursor : nil, freeOnly: freeOnly)
             items = more ? items + found : found
             cursor = next
         } catch { self.error = error.localizedDescription }
     }
 
     private func insert(_ it: RobloxWeb.Item) {
+        error = nil; needsAuth = false
+        func handleAuthError(_ err: Error) {
+            statusBanner = nil
+            if case AssetCache.AssetError.authRequired = err {
+                self.error = "Sign in to Roblox to insert \(it.name)."
+                self.needsAuth = true
+            } else {
+                self.error = "Couldn't insert \(it.name): \(err.localizedDescription)"
+            }
+        }
         switch category {
         case .models:
+            statusBanner = "Downloading \(it.name)…"
             store.showToast("Downloading \(it.name)…")
             Task {
                 do {
                     let data = try await AssetCache.shared.download(it.id)
                     let doc = try RbxFile.read(data)
                     store.session.insertDocument(doc)
-                    if let first = doc.roots.first {
-                        let parts = ([first] + first.descendants()).filter { $0.isA("BasePart") }
-                        if !parts.isEmpty { ModelMathApp.moveTo(parts, store.spawnPoint()) }
-                    }
+                    let ws = store.model.workspace
+                    let wsParts = doc.roots.filter { $0.isDescendant(of: ws) }
+                        .flatMap { [$0] + $0.descendants() }
+                        .filter { $0.isA("BasePart") }
+                    if !wsParts.isEmpty { ModelMathApp.moveTo(wsParts, store.spawnPoint()) }
+                    statusBanner = "Inserted \(it.name)"
                     store.showToast("Inserted \(it.name)")
-                    dismiss()
-                } catch { self.error = "Couldn't insert: \(error.localizedDescription)" }
+                } catch { handleAuthError(error) }
             }
         case .decals:
-            let target = store.selection.first(where: { $0.isA("BasePart") })
-            let d = InstanceFactory.create("Decal")
-            d.set("Texture", .string("rbxassetid://\(it.id)"), notify: false)
-            d.name = it.name
-            if let t = target { store.session.undo.begin("Insert Decal"); try? store.session.reparent(d, t); store.session.undo.commit() }
-            else { store.showToast("Select a part to put the decal on"); return }
-            dismiss()
+            let texUri = "rbxassetid://\(it.id)"
+            if let target = store.selection.first(where: { $0.isA("BasePart") }) {
+                let d = store.session.insertObject("Decal", into: target)
+                d.set("Texture", .string(texUri))
+                d.name = it.name
+            } else {
+                store.session.undo.begin("Insert Decal")
+                let host = store.session.insertObject("Part", into: store.model.workspace, at: store.spawnPoint() + Vector3(0, 3, 0))
+                host.name = it.name
+                host.set("size", .vector3(Vector3(6, 6, 0.4)))
+                host.set("Anchored", .bool(true))
+                let d = store.session.insertObject("Decal", into: host)
+                d.set("Texture", .string(texUri))
+                d.name = it.name
+                store.session.select([host])
+                store.session.undo.commit()
+            }
+            statusBanner = "Inserted \(it.name)"
+            store.showToast("Inserted \(it.name)")
         case .meshes:
-            let mp = store.session.insertObject("MeshPart", at: store.spawnPoint() + Vector3(0, 2, 0))
-            mp.name = it.name
-            mp.set("MeshId", .string("rbxassetid://\(it.id)"))
-            dismiss()
+            statusBanner = "Downloading \(it.name)…"
+            store.showToast("Downloading \(it.name)…")
+            Task {
+                do {
+                    let data = try await AssetCache.shared.download(it.id)
+                    if let doc = try? RbxFile.read(data), !doc.roots.isEmpty {
+                        store.session.insertDocument(doc)
+                        let ws = store.model.workspace
+                        let wsParts = doc.roots.filter { $0.isDescendant(of: ws) }
+                            .flatMap { [$0] + $0.descendants() }
+                            .filter { $0.isA("BasePart") }
+                        if !wsParts.isEmpty { ModelMathApp.moveTo(wsParts, store.spawnPoint()) }
+                    } else {
+                        let parsed = try? MeshFile.parse(data)
+                        let size: Vector3
+                        if let m = parsed, m.max.count >= 3, m.min.count >= 3 {
+                            size = Vector3(
+                                max(0.2, min(100, m.max[0] - m.min[0])),
+                                max(0.2, min(100, m.max[1] - m.min[1])),
+                                max(0.2, min(100, m.max[2] - m.min[2]))
+                            )
+                        } else {
+                            size = Vector3(4, 4, 4)
+                        }
+                        store.session.undo.begin("Insert Mesh")
+                        let mp = store.session.insertObject("MeshPart", into: store.model.workspace, at: store.spawnPoint() + Vector3(0, size.y / 2, 0))
+                        mp.name = it.name
+                        mp.set("size", .vector3(size))
+                        mp.set("Anchored", .bool(true))
+                        mp.set("MeshId", .string("rbxassetid://\(it.id)"))
+                        store.session.undo.commit()
+                    }
+                    statusBanner = "Inserted \(it.name)"
+                    store.showToast("Inserted \(it.name)")
+                } catch { handleAuthError(error) }
+            }
         case .audio:
             let s = store.session.insertObject("Sound", into: store.model.workspace)
             s.name = it.name
             s.set("SoundId", .string("rbxassetid://\(it.id)"))
-            dismiss()
+            statusBanner = "Inserted \(it.name)"
+            store.showToast("Inserted \(it.name)")
         }
     }
 }

@@ -5,6 +5,8 @@ import StudioCore
 /// Metal replacement for the Android GLES SceneRenderer: sky, parts (instanced, grouped by
 /// shape and material texture), transparent parts, then selection boxes and tool handles on top.
 final class SceneRenderer: NSObject, MTKViewDelegate {
+    typealias LightVec8 = (SIMD4<Float>, SIMD4<Float>, SIMD4<Float>, SIMD4<Float>,
+                           SIMD4<Float>, SIMD4<Float>, SIMD4<Float>, SIMD4<Float>)
     struct FrameUniforms {
         var viewProj: simd_float4x4
         var invViewProj: simd_float4x4
@@ -16,7 +18,15 @@ final class SceneRenderer: NSObject, MTKViewDelegate {
         var params: SIMD4<Float>
         var shadowVP: simd_float4x4
         var shadowOn: SIMD4<Float>
+        var ambientTint: SIMD4<Float>
+        var fogColor: SIMD4<Float>
+        var fogRange: SIMD4<Float>
+        var trueSunDir: SIMD4<Float>
+        var lightPos: LightVec8
+        var lightCol: LightVec8
+        var lightDirL: LightVec8
     }
+    struct SkyboxUniforms { var rot: simd_float4x4 }
     struct PartInstance {
         var model: simd_float4x4
         var rotation: simd_float4x4
@@ -46,6 +56,8 @@ final class SceneRenderer: NSObject, MTKViewDelegate {
     private var partPipeline: MTLRenderPipelineState!
     private var partBlendPipeline: MTLRenderPipelineState!
     private var skyPipeline: MTLRenderPipelineState!
+    private var skyboxPipeline: MTLRenderPipelineState!
+    private var skyboxFaces: [GPUMesh] = []
     private var overlayPipeline: MTLRenderPipelineState!
     private var shadowPipeline: MTLRenderPipelineState!
     private var shadowMap: MTLTexture!
@@ -58,6 +70,7 @@ final class SceneRenderer: NSObject, MTKViewDelegate {
     private var depthReadOnly: MTLDepthStencilState!
     private var depthNone: MTLDepthStencilState!
     private var sampler: MTLSamplerState!
+    private var clampSampler: MTLSamplerState!
     private var meshes: [ShapeKind: GPUMesh] = [:]
     private var overlayMeshes: [OverlayMesh: GPUMesh] = [:]
     private let textures = MaterialTextures()
@@ -107,6 +120,7 @@ final class SceneRenderer: NSObject, MTKViewDelegate {
         partPipeline = try pipe("part_vs", "part_fs", blend: false, vertexDesc: vd)
         partBlendPipeline = try pipe("part_vs", "part_fs", blend: true, vertexDesc: vd)
         skyPipeline = try pipe("sky_vs", "sky_fs", blend: false, vertexDesc: nil)
+        skyboxPipeline = try pipe("skybox_vs", "skybox_fs", blend: false, vertexDesc: vd)
         overlayPipeline = try pipe("overlay_vs", "overlay_fs", blend: true, vertexDesc: vd)
         decalPipeline = try pipe("decal_vs", "decal_fs", blend: true, vertexDesc: vd)
         terrain = try? TerrainRenderer(device: device, library: lib)
@@ -137,6 +151,11 @@ final class SceneRenderer: NSObject, MTKViewDelegate {
         sd.sAddressMode = .repeat; sd.tAddressMode = .repeat
         sd.maxAnisotropy = 8
         sampler = device.makeSamplerState(descriptor: sd)
+
+        sd.sAddressMode = .clampToEdge; sd.tAddressMode = .clampToEdge
+        clampSampler = device.makeSamplerState(descriptor: sd)
+
+        skyboxFaces = Self.makeSkyboxFaces(device: device)
 
         meshes[.box] = MeshFactory.cube(device)
         meshes[.wedge] = MeshFactory.wedge(device)
@@ -180,24 +199,33 @@ final class SceneRenderer: NSObject, MTKViewDelegate {
         inflight.wait()
         ringIndex = (ringIndex + 1) % 3
         store.tick()
-        shadowsEnabled = store.shadows
+        let lighting = store.lightingInfo()
+        shadowsEnabled = store.shadows && lighting.globalShadows
         FPSMeter.shared.frame()
 
         let w = Float(view.drawableSize.width), h = Float(view.drawableSize.height)
         let (camCF, fov) = store.renderCamera()
         let proj = simd_float4x4.perspective(fovY: fov * .pi / 180, aspect: w / max(h, 1), near: 0.1, far: 20000)
         let vp = proj * camCF.inverse.matrix()
-        let lighting = store.lightingInfo()
         terrain?.update(root: store.shownModel, camera: camCF.position)
+        let gatheredLights = Self.gatherLights(store: store, camPos: camCF.position.simd)
         let frame = FrameUniforms(
             viewProj: vp, invViewProj: vp.inverse,
-            camPos: SIMD4(camCF.position.simd, 1),
-            lightDir: SIMD4(lighting.sunDir, 0),
-            sunColor: SIMD4(lighting.sunColor, 0),
-            horizon: SIMD4(0.78, 0.86, 0.96, 1), zenith: SIMD4(0.36, 0.58, 0.92, 1),
-            params: SIMD4(lighting.ambient, 1.0, Float(Date().timeIntervalSince(start)), surfTex == nil ? 0 : 1),
+            camPos: SIMD4(camCF.position.simd, lighting.dayFactor),
+            lightDir: SIMD4(lighting.sunDir, lighting.starCount),
+            sunColor: SIMD4(lighting.sunColor, lighting.celestialShown ? 1 : 0),
+            horizon: SIMD4(lighting.horizon, lighting.atmoDensity),
+            zenith: SIMD4(lighting.zenith, lighting.atmoHaze),
+            params: SIMD4(lighting.ambient, lighting.exposure, Float(Date().timeIntervalSince(start)), surfTex == nil ? 0 : 1),
             shadowVP: SceneRenderer.shadowMatrix(camera: camCF, sun: lighting.sunDir),
-            shadowOn: SIMD4(shadowsEnabled ? 1 : 0, 0, 0, 0))
+            shadowOn: SIMD4(shadowsEnabled ? 1 : 0, Float(gatheredLights.count), lighting.atmoGlare, lighting.atmoOffset),
+            ambientTint: SIMD4(lighting.ambientTint, 0),
+            fogColor: SIMD4(lighting.fogColor, lighting.fogEnd < 90000 ? 1 : 0),
+            fogRange: SIMD4(lighting.fogStart, lighting.fogEnd, lighting.trueSunDir.y, 0),
+            trueSunDir: SIMD4(lighting.trueSunDir, 0),
+            lightPos: gatheredLights.pos,
+            lightCol: gatheredLights.col,
+            lightDirL: gatheredLights.dir)
 
         // Build part instances, grouped by (mesh, textures) and opaque vs transparent.
         struct Group { var mesh: GPUMesh; var color: MTLTexture?; var normal: MTLTexture?; var items: [PartInstance] }
@@ -241,7 +269,7 @@ final class SceneRenderer: NSObject, MTKViewDelegate {
             let isNegate = p.className == "NegateOperation"
             let drawColor = isNegate ? c.lerp(Color3(0.92, 0.22, 0.22), 0.65) : c
             let drawAlpha: Float = isNegate ? min(1 - t, 0.42) : (1 - t)
-            let drawTrans = isNegate || t > 0.001
+            let drawTrans = isNegate || t > 0.001 || material == 1584
 
             var model = cf.matrix(scale: size)
             var meshKey: String
@@ -258,6 +286,12 @@ final class SceneRenderer: NSObject, MTKViewDelegate {
                     colorTex = tx; texMode = 2; meshKey += "|" + tid
                 }
             } else {
+                if let sm = p.children.first(where: { $0.className == "SpecialMesh" }),
+                   (sm.get("MeshType")?.asEnum ?? 6) != 5 {
+                    let sc = sm.get("Scale")?.asVector3 ?? .one
+                    let off = sm.get("Offset")?.asVector3 ?? .zero
+                    model = (cf * CFrame.at(off)).matrix(scale: size * sc)
+                }
                 let shape: ShapeKind
                 switch PartData.shape(p) {
                 case .ball: shape = .ball
@@ -280,7 +314,7 @@ final class SceneRenderer: NSObject, MTKViewDelegate {
             let inst = PartInstance(
                 model: model, rotation: cf.rotationOnly.matrix(),
                 color: SIMD4(drawColor.r, drawColor.g, drawColor.b, drawAlpha), size: SIMD4(size.simd, 0),
-                surfA: surfaces ? SIMD4(surf(p, "RightSurface"), surf(p, "TopSurface"), surf(p, "BackSurface"), 0) : .zero,
+                surfA: surfaces ? SIMD4(surf(p, "RightSurface"), surf(p, "TopSurface"), surf(p, "BackSurface"), p.className == "TrussPart" ? 1 : 0) : SIMD4(0, 0, 0, p.className == "TrussPart" ? 1 : 0),
                 surfB: surfaces ? SIMD4(surf(p, "LeftSurface"), surf(p, "BottomSurface"), surf(p, "FrontSurface"), 0) : .zero,
                 mat: MaterialTextures.params(material),
                 extra: SIMD4(material == 288 ? 1 : 0, texMode, 1 / 8, normalTex != nil ? 1 : 0))
@@ -303,7 +337,8 @@ final class SceneRenderer: NSObject, MTKViewDelegate {
                 faceItems.append(d)
             }
             for d in faceItems {
-                let img = (d.get("Texture") ?? d.get("ColorMapContent"))?.description ?? ""
+                let tv = d.get("Texture") ?? d.get("ColorMapContent")
+                let img = (tv?.asURI ?? tv?.description ?? "").trimmingCharacters(in: .whitespaces)
                 guard !img.isEmpty, let tex = textureCache.texture(for: img, device: device) else { continue }
                 let face = Int(d.get("Face")?.asEnum ?? 5)
                 let (local, w, h) = SceneRenderer.faceFrame(face, size)
@@ -322,13 +357,19 @@ final class SceneRenderer: NSObject, MTKViewDelegate {
         }
         let overlays = store.overlays()
 
+        let skyTextures: [MTLTexture]? = {
+            guard let uris = lighting.skyboxURIs, uris.count == 6, skyboxFaces.count == 6 else { return nil }
+            let loaded = uris.compactMap { textureCache.texture(for: $0, device: device) }
+            return loaded.count == 6 ? loaded : nil
+        }()
+
         let partStride = MemoryLayout<PartInstance>.stride, ovStride = MemoryLayout<OverlayInstance>.stride
         let partCount = opaque.values.reduce(0) { $0 + $1.items.count } + transparent.values.reduce(0) { $0 + $1.items.count }
         // Every put() is 256-byte aligned, so budget one alignment pad per upload.
         let decalCount = decals.values.reduce(0) { $0 + $1.1.count }
-        let uploads = 1 + opaque.count + transparent.count + overlays.count + decals.count
+        let uploads = 2 + opaque.count + transparent.count + overlays.count + decals.count
         let total = MemoryLayout<FrameUniforms>.stride + partCount * partStride + overlays.count * ovStride
-            + decalCount * MemoryLayout<DecalInstance>.stride + uploads * 256
+            + decalCount * MemoryLayout<DecalInstance>.stride + MemoryLayout<SkyboxUniforms>.stride + uploads * 256
         let buf = buffer(total)
         var offset = 0
         func put<T>(_ arr: [T]) -> Int {
@@ -339,6 +380,9 @@ final class SceneRenderer: NSObject, MTKViewDelegate {
             return o
         }
         let frameOffset = put([frame])
+        let ori = lighting.skyboxOrientation
+        let skyRotCF = ori == .zero ? CFrame.identity : CFrame.fromOrientation(ori.x * .pi / 180, ori.y * .pi / 180, ori.z * .pi / 180)
+        let skyOffset = put([SkyboxUniforms(rot: skyRotCF.matrix())])
 
         guard let cmd = queue.makeCommandBuffer() else { inflight.signal(); return }
         // Opaque instance data is uploaded once and shared by the shadow and main passes.
@@ -373,12 +417,24 @@ final class SceneRenderer: NSObject, MTKViewDelegate {
         enc.setFragmentBuffer(buf, offset: frameOffset, index: 1)
 
         // Sky
+        enc.setCullMode(.none)
         enc.setRenderPipelineState(skyPipeline)
         enc.setDepthStencilState(depthNone)
         enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
+        if let skyTextures {
+            enc.setRenderPipelineState(skyboxPipeline)
+            enc.setDepthStencilState(depthNone)
+            enc.setFragmentSamplerState(clampSampler, index: 0)
+            enc.setVertexBuffer(buf, offset: skyOffset, index: 2)
+            for (i, faceMesh) in skyboxFaces.enumerated() {
+                enc.setVertexBuffer(faceMesh.buffer, offset: 0, index: 0)
+                enc.setFragmentTexture(skyTextures[i], index: 0)
+                enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: faceMesh.vertexCount)
+            }
+            enc.setFragmentSamplerState(sampler, index: 0)
+        }
 
         // Parts
-        enc.setCullMode(.none)
         func drawGroups(_ groups: [(Group, Int)]) {
             for (g, o) in groups {
                 let mesh = g.mesh
@@ -464,6 +520,80 @@ final class SceneRenderer: NSObject, MTKViewDelegate {
         case 3: return (CFrame.at(Vector3(-s.x / 2 - e, 0, 0)) * .ry(-.pi / 2), s.z, s.y)    // Left
         case 4: return (CFrame.at(Vector3(0, -s.y / 2 - e, 0)) * .rx(.pi / 2), s.x, s.z)     // Bottom
         default: return (CFrame.at(Vector3(0, 0, -s.z / 2 - e)) * .ry(.pi), s.x, s.y)       // Front
+        }
+    }
+
+    @MainActor
+    static func gatherLights(store: StudioStore, camPos: SIMD3<Float>) -> (count: Int, pos: LightVec8, col: LightVec8, dir: LightVec8) {
+        var found: [(Float, SIMD4<Float>, SIMD4<Float>, SIMD4<Float>)] = []
+        for l in store.renderLights() {
+            guard let p = l.parent, p.isA("BasePart") else { continue }
+            let cf = PartData.cframe(p)
+            let worldPos = cf.position.simd
+            let d = worldPos - camPos
+            let distSq = simd_dot(d, d)
+            let range = max(0.5, min(60, l.get("Range")?.asFloat ?? 8))
+            let bright = max(0, min(40, l.get("Brightness")?.asFloat ?? 1))
+            let c = l.get("Color")?.asColor3 ?? Color3(1, 1, 1)
+            let type: Float
+            var fwd: SIMD3<Float> = .zero
+            var cosHalf: Float = -1
+            switch l.className {
+            case "SpotLight": type = 1
+            case "SurfaceLight": type = 2
+            default: type = 0
+            }
+            if type > 0 {
+                let face = Int(l.get("Face")?.asEnum ?? 5)
+                let localAxis: Vector3
+                switch face {
+                case 0: localAxis = Vector3(1, 0, 0)
+                case 1: localAxis = Vector3(0, 1, 0)
+                case 2: localAxis = Vector3(0, 0, 1)
+                case 3: localAxis = Vector3(-1, 0, 0)
+                case 4: localAxis = Vector3(0, -1, 0)
+                default: localAxis = Vector3(0, 0, -1)
+                }
+                fwd = cf.vectorToWorld(localAxis).unit.simd
+                let angleDeg = max(1, min(180, l.get("Angle")?.asFloat ?? 90))
+                cosHalf = cos((angleDeg * .pi / 180) * 0.5)
+            }
+            found.append((
+                distSq,
+                SIMD4(worldPos, range),
+                SIMD4(c.r * bright, c.g * bright, c.b * bright, type),
+                SIMD4(fwd, cosHalf)
+            ))
+        }
+        found.sort { $0.0 < $1.0 }
+        let top = Array(found.prefix(8))
+        func pack(_ sel: ( (Float, SIMD4<Float>, SIMD4<Float>, SIMD4<Float>) ) -> SIMD4<Float>) -> LightVec8 {
+            func at(_ i: Int) -> SIMD4<Float> { i < top.count ? sel(top[i]) : .zero }
+            return (at(0), at(1), at(2), at(3), at(4), at(5), at(6), at(7))
+        }
+        return (top.count, pack { $0.1 }, pack { $0.2 }, pack { $0.3 })
+    }
+
+    static func makeSkyboxFaces(device: MTLDevice) -> [GPUMesh] {
+        // Face order: Ft (-Z), Bk (+Z), Rt (-X per Roblox skybox basis), Lf (+X), Up (+Y), Dn (-Y).
+        let specs: [(SIMD3<Float>, SIMD3<Float>, SIMD3<Float>)] = [
+            (SIMD3(0, 0, -1), SIMD3(1, 0, 0), SIMD3(0, 1, 0)),
+            (SIMD3(0, 0, 1), SIMD3(-1, 0, 0), SIMD3(0, 1, 0)),
+            (SIMD3(-1, 0, 0), SIMD3(0, 0, -1), SIMD3(0, 1, 0)),
+            (SIMD3(1, 0, 0), SIMD3(0, 0, 1), SIMD3(0, 1, 0)),
+            (SIMD3(0, 1, 0), SIMD3(0, 0, -1), SIMD3(1, 0, 0)),
+            (SIMD3(0, -1, 0), SIMD3(0, 0, -1), SIMD3(-1, 0, 0)),
+        ]
+        let corners: [(Float, Float)] = [(-1, -1), (1, -1), (1, 1), (-1, -1), (1, 1), (-1, 1)]
+        return specs.compactMap { center, right, up in
+            var data: [Float] = []
+            let nrm = -center
+            for (fx, fy) in corners {
+                let p = center + right * fx + up * fy
+                data += [p.x, p.y, p.z, nrm.x, nrm.y, nrm.z, (fx + 1) * 0.5, (1 - fy) * 0.5]
+            }
+            guard let buf = device.makeBuffer(bytes: data, length: data.count * 4, options: .storageModeShared) else { return nil }
+            return GPUMesh(buffer: buf, vertexCount: 6, primitive: .triangle)
         }
     }
 }

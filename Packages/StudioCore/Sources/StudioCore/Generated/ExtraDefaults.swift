@@ -478,6 +478,12 @@ enum ExtraDefaults {
                 ("SunAngularSize", .float(21.0)),
                 ("MoonAngularSize", .float(11.0)),
                 ("SkyboxOrientation", .vector3(.zero)),
+                ("SkyboxBk", .string("rbxasset://textures/sky/sky512_bk.tex")),
+                ("SkyboxDn", .string("rbxasset://textures/sky/sky512_dn.tex")),
+                ("SkyboxFt", .string("rbxasset://textures/sky/sky512_ft.tex")),
+                ("SkyboxLf", .string("rbxasset://textures/sky/sky512_lf.tex")),
+                ("SkyboxRt", .string("rbxasset://textures/sky/sky512_rt.tex")),
+                ("SkyboxUp", .string("rbxasset://textures/sky/sky512_up.tex")),
                 ("SunTextureId", .string("rbxasset://sky/sun.jpg")),
                 ("MoonTextureId", .string("rbxasset://sky/moon.jpg")),
             ]

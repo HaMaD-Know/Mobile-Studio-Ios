@@ -1,6 +1,6 @@
 // Generated from the Android PropertiesPanel category table.
 enum PropCategories {
-    static let order: [String] = ["Appearance", "Data", "Text", "Image", "Behavior", "Transform", "Pivot", "Collision", "Part", "Surface", "Assembly", "Playback", "Emitter", "Character", "Health", "Movement", "Rigging", "Camera", "Controls", "Mobile", "Shape", "Emission", "Motion", "Particles", "Light", "Scripting", "Model", "Physics", "Attachments", "Constraints", "Input", "Layout", "State", "Teams", "Game", "Other"]
+    static let order: [String] = ["Appearance", "Data", "Text", "Image", "Behavior", "Transform", "Pivot", "Collision", "Part", "Surface", "Assembly", "Playback", "Emitter", "Character", "Health", "Movement", "Rigging", "Camera", "Controls", "Mobile", "Shape", "Emission", "Motion", "Particles", "Light", "Exposure", "Fog", "Atmosphere", "Sky", "Celestial", "Scripting", "Model", "Physics", "Attachments", "Constraints", "Input", "Layout", "State", "Teams", "Game", "Other"]
     static let map: [String: String] = {
         var m: [String: String] = [:]
         for k in ["BrickColor", "CastShadow", "Color", "Material", "MaterialVariant", "Reflectance", "Transparency", "BackgroundColor3", "BackgroundTransparency", "BorderColor3", "BorderMode", "BorderSizePixel", "Visible", "Texture", "Face", "Color3", "ZIndex", "TextureID", "DoubleSided", "RenderFidelity", "SmoothingAngle", "UsePartColor", "FillColor", "FillTransparency", "OutlineColor", "OutlineTransparency", "DepthMode", "LineThickness", "SurfaceColor3", "SurfaceTransparency", "StudsPerTileU", "StudsPerTileV", "OffsetStudsU", "OffsetStudsV", "LightInfluence", "Brightness", "Shadows", "Range", "Angle", "Thickness", "LineJoinMode", "CornerRadius", "Rotation", "Offset", "VertexColor", "Scale", "MeshType", "TextureId"] where m[k] == nil { m[k] = "Appearance" }
@@ -21,7 +21,12 @@ enum PropCategories {
         for k in ["RigType", "RequiresNeck", "AutomaticScalingEnabled"] where m[k] == nil { m[k] = "Rigging" }
         for k in ["CameraType", "FieldOfView", "FieldOfViewMode", "CameraSubject", "Focus", "HeadLocked", "HeadScale", "DiagonalFieldOfView", "MaxAxisFieldOfView"] where m[k] == nil { m[k] = "Camera" }
         for k in ["Rate", "Lifetime", "Speed", "SpreadAngle", "EmissionDirection", "Drag", "Acceleration", "LockedToPart", "VelocityInheritance", "ZOffset", "Squash", "TimeScale"] where m[k] == nil { m[k] = "Emission" }
-        for k in ["Ambient", "OutdoorAmbient", "ClockTime", "GeographicLatitude", "TimeOfDay", "ExposureCompensation", "GlobalShadows", "FogColor", "FogEnd", "FogStart", "EnvironmentDiffuseScale", "EnvironmentSpecularScale", "ColorShift_Bottom", "ColorShift_Top", "Technology", "ShadowSoftness"] where m[k] == nil { m[k] = "Light" }
+        for k in ["Ambient", "OutdoorAmbient", "ClockTime", "GeographicLatitude", "TimeOfDay", "GlobalShadows", "EnvironmentDiffuseScale", "EnvironmentSpecularScale", "ColorShift_Bottom", "ColorShift_Top", "Technology", "ShadowSoftness"] where m[k] == nil { m[k] = "Light" }
+        for k in ["ExposureCompensation"] where m[k] == nil { m[k] = "Exposure" }
+        for k in ["FogColor", "FogEnd", "FogStart"] where m[k] == nil { m[k] = "Fog" }
+        for k in ["Density", "Decay", "Glare", "Haze"] where m[k] == nil { m[k] = "Atmosphere" }
+        for k in ["SkyboxBk", "SkyboxDn", "SkyboxFt", "SkyboxLf", "SkyboxOrientation", "SkyboxRt", "SkyboxUp"] where m[k] == nil { m[k] = "Sky" }
+        for k in ["CelestialBodiesShown", "MoonAngularSize", "MoonTextureId", "StarCount", "SunAngularSize", "SunTextureId"] where m[k] == nil { m[k] = "Celestial" }
         for k in ["Gravity", "FallenPartsDestroyHeight", "StreamingEnabled", "RespawnTime", "MaxPlayers", "CharacterAutoLoads"] where m[k] == nil { m[k] = "Game" }
         for k in ["TeamColor", "AutoAssignable", "Neutral", "AllowTeamChangeOnTouch", "Duration"] where m[k] == nil { m[k] = "Teams" }
         for k in ["Padding", "FillDirection", "HorizontalAlignment", "VerticalAlignment", "SortOrder", "CellSize", "CellPadding", "PaddingTop", "PaddingBottom", "PaddingLeft", "PaddingRight", "AspectRatio", "AspectType", "DominantAxis", "MinSize", "MaxSize", "Wraps"] where m[k] == nil { m[k] = "Layout" }

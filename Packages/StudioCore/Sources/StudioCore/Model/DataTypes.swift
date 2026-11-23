@@ -210,6 +210,13 @@ public enum PropValue: Hashable, CustomStringConvertible {
     public var asColor3: Color3? { if case .color3(let v) = self { return v }; return nil }
     public var asEnum: UInt32? { if case .enumValue(let v) = self { return v.value }; return nil }
     public var asInstance: Instance? { if case .ref(let v) = self { return v }; return nil }
+    public var asURI: String? {
+        switch self {
+        case .string(let s): return s
+        case .content(let c): return c.sourceType == 1 ? c.uri : ""
+        default: return nil
+        }
+    }
 }
 
 /// Content property (type 0x22): either a URI or a reference to an Instance.

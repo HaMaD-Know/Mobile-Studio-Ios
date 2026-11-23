@@ -72,6 +72,8 @@ final class StudioStore: ObservableObject, TreeListener {
     private var lastTick = CACurrentMediaTime()
     private var partsCache: [Instance] = []
     private var partsCacheStamp = -1
+    private var lightsCache: [Instance] = []
+    private var lightsCacheStamp = -1
     private var pendingTree = false, pendingProps = false
 
     init() {
@@ -322,6 +324,19 @@ final class StudioStore: ObservableObject, TreeListener {
         return partsCache
     }
 
+    func renderLights() -> [Instance] {
+        let stamp = Instance.changeCount * 2 + (play == nil ? 0 : 1)
+        if lightsCacheStamp != stamp {
+            lightsCacheStamp = stamp
+            lightsCache = shownModel.workspace.descendants().filter {
+                ClassDb.isA($0.className, "Light")
+                    && $0.get("Enabled")?.asBool != false
+                    && ($0.parent?.isA("BasePart") == true)
+            }
+        }
+        return lightsCache
+    }
+
     func renderCamera() -> (CFrame, Float) {
         if let play { return (play.cameraCFrame, play.fieldOfView) }
         return (camera.cframe(), camera.fov)
@@ -355,6 +370,7 @@ final class StudioStore: ObservableObject, TreeListener {
         }
         play = session
         partsCacheStamp = -1
+        lightsCacheStamp = -1
         session.start()
         log("Playtest started")
     }
@@ -365,19 +381,138 @@ final class StudioStore: ObservableObject, TreeListener {
         audio.stopAll()
         play = nil
         partsCacheStamp = -1
+        lightsCacheStamp = -1
         Instance.changeCount += 1
         log("Playtest stopped")
     }
 
-    struct Lighting { var sunDir: SIMD3<Float>; var sunColor: SIMD3<Float>; var ambient: Float }
+    struct Lighting {
+        var sunDir: SIMD3<Float>
+        var trueSunDir: SIMD3<Float>
+        var sunColor: SIMD3<Float>
+        var ambient: Float
+        var ambientTint: SIMD3<Float>
+        var exposure: Float
+        var horizon: SIMD3<Float>
+        var zenith: SIMD3<Float>
+        var fogColor: SIMD3<Float>
+        var fogStart: Float
+        var fogEnd: Float
+        var atmoDensity: Float
+        var atmoHaze: Float
+        var atmoGlare: Float
+        var atmoOffset: Float
+        var globalShadows: Bool
+        var dayFactor: Float
+        var starCount: Float
+        var celestialShown: Bool
+        var skyboxURIs: [String]?
+        var skyboxOrientation: SIMD3<Float>
+    }
+
+    private static func parseClock(_ l: Instance?) -> Float {
+        if let c = l?.get("ClockTime")?.asFloat { return c }
+        if let s = l?.get("TimeOfDay")?.asString {
+            let p = s.split(separator: ":")
+            if p.count >= 2, let h = Float(p[0]), let m = Float(p[1]) {
+                let sec = p.count >= 3 ? (Float(p[2]) ?? 0) : 0
+                return h + m / 60 + sec / 3600
+            }
+        }
+        return 14
+    }
+
     func lightingInfo() -> Lighting {
+        func smoothstep(_ e0: Float, _ e1: Float, _ x: Float) -> Float {
+            let t = max(0, min(1, (x - e0) / (e1 - e0)))
+            return t * t * (3 - 2 * t)
+        }
         let l = shownModel.findService("Lighting")
-        let clock = l?.get("ClockTime")?.asFloat ?? 14
-        let bright = l?.get("Brightness")?.asFloat ?? 2
+        let clock = Self.parseClock(l)
+        let bright = max(0, l?.get("Brightness")?.asFloat ?? 2)
+        let geoLat = l?.get("GeographicLatitude")?.asFloat ?? 41.733
+        let expComp = max(-3, min(3, l?.get("ExposureCompensation")?.asFloat ?? 0))
+        let globalShadows = l?.get("GlobalShadows")?.asBool ?? true
+        let am = l?.get("Ambient")?.asColor3 ?? .fromRGB(70, 70, 70)
+        let oa = l?.get("OutdoorAmbient")?.asColor3 ?? .fromRGB(128, 128, 128)
+        let fg = l?.get("FogColor")?.asColor3 ?? .fromRGB(192, 192, 192)
+        let fogStart = l?.get("FogStart")?.asFloat ?? 0
+        let fogEnd = l?.get("FogEnd")?.asFloat ?? 100000
+
         let a = (clock - 6) / 12 * .pi
-        let dir = simd_normalize(SIMD3<Float>(-cos(a) * 0.75, max(sin(a), 0.08), 0.45))
-        let day = max(0.25, min(1, sin(a) * 1.5 + 0.3))
-        return Lighting(sunDir: dir, sunColor: SIMD3(1, 0.97, 0.9) * (0.45 + bright * 0.22) * day, ambient: 0.5 + 0.1 * day)
+        let lat = geoLat * .pi / 180
+        let rawSun = simd_normalize(SIMD3<Float>(-cos(a), cos(lat) * sin(a), sin(lat) * sin(a) + 1e-4))
+        let dayFactor = smoothstep(-0.08, 0.18, rawSun.y)
+        let lightVec = rawSun.y < 0 ? -rawSun : rawSun
+        let sunDir = simd_normalize(SIMD3<Float>(lightVec.x, max(lightVec.y, 0.08), lightVec.z))
+
+        let sunset = smoothstep(0.35, 0, abs(sin(a))) * smoothstep(-0.2, 0.05, sin(a))
+        let daySun = simd_mix(SIMD3<Float>(1.0, 0.97, 0.91), SIMD3<Float>(1.0, 0.56, 0.28), SIMD3(repeating: sunset * 0.75))
+        let dayCol = daySun * (0.42 + bright * 0.24) * dayFactor
+        let moonCol = SIMD3<Float>(0.12, 0.14, 0.22) * max(0.35, min(1.2, bright * 0.4)) * (1 - dayFactor)
+        let sunColor = dayCol + moonCol
+
+        func luma(_ c: Color3) -> Float { 0.299 * c.r + 0.587 * c.g + 0.114 * c.b }
+        let amV = SIMD3<Float>(am.r, am.g, am.b), oaV = SIMD3<Float>(oa.r, oa.g, oa.b)
+        let ambScalar = min(0.92, max(0.18, luma(oa) * 0.42 + luma(am) * 0.30 + 0.22)) * (dayFactor * 0.65 + 0.35)
+        let ambMix = oaV * 0.6 + amV * 0.4 + SIMD3(repeating: 0.08)
+        let avgAmb = max(0.15, (ambMix.x + ambMix.y + ambMix.z) / 3)
+        let ambientTint = simd_clamp(ambMix / avgAmb, SIMD3(repeating: 0.45), SIMD3(repeating: 1.65))
+        let exposure = pow(2, expComp)
+
+        let dayZenith = SIMD3<Float>(0.30, 0.54, 0.90)
+        let dayHorizon = SIMD3<Float>(0.76, 0.86, 0.96)
+        let sunZenith = simd_mix(dayZenith, SIMD3<Float>(0.36, 0.32, 0.56), SIMD3(repeating: sunset * 0.75))
+        let sunHorizon = simd_mix(dayHorizon, SIMD3<Float>(0.96, 0.56, 0.34), SIMD3(repeating: sunset * 0.85))
+        let nightZenith = SIMD3<Float>(0.02, 0.03, 0.08)
+        let nightHorizon = SIMD3<Float>(0.06, 0.09, 0.17)
+        var zenith = simd_mix(nightZenith, sunZenith, SIMD3(repeating: dayFactor))
+        var horizon = simd_mix(nightHorizon, sunHorizon, SIMD3(repeating: dayFactor))
+
+        var fogColor = SIMD3<Float>(fg.r, fg.g, fg.b)
+        var atmoDensity: Float = 0, atmoHaze: Float = 0, atmoGlare: Float = 0, atmoOffset: Float = 0
+        if let atmo = l?.children.last(where: { $0.className == "Atmosphere" }) {
+            atmoDensity = max(0, min(1, atmo.get("Density")?.asFloat ?? 0))
+            atmoOffset = max(0, min(1, atmo.get("Offset")?.asFloat ?? 0))
+            atmoGlare = max(0, min(10, atmo.get("Glare")?.asFloat ?? 0))
+            atmoHaze = max(0, min(10, atmo.get("Haze")?.asFloat ?? 0))
+            if atmoDensity > 0.001 || atmoHaze > 0.001 {
+                let ac = atmo.get("Color")?.asColor3 ?? .fromRGB(199, 170, 107)
+                let dc = atmo.get("Decay")?.asColor3 ?? .fromRGB(92, 60, 13)
+                let atmoCol = simd_mix(SIMD3(dc.r, dc.g, dc.b), SIMD3(ac.r, ac.g, ac.b), SIMD3(repeating: max(0.2, dayFactor)))
+                horizon = simd_mix(horizon, atmoCol, SIMD3(repeating: min(0.75, atmoDensity * 0.9 + atmoHaze * 0.06)))
+                zenith = simd_mix(zenith, atmoCol * 0.75, SIMD3(repeating: min(0.45, atmoHaze * 0.045)))
+                if fogEnd >= 90000 {
+                    fogColor = simd_mix(fogColor, horizon, SIMD3(repeating: min(1, atmoDensity * 1.4)))
+                }
+            }
+        }
+
+        var starCount: Float = 3000
+        var celestialShown = true
+        var skyboxURIs: [String]? = nil
+        var skyboxOri: SIMD3<Float> = .zero
+        if let sky = l?.children.last(where: { $0.className == "Sky" }) {
+            celestialShown = sky.get("CelestialBodiesShown")?.asBool ?? true
+            starCount = Float(sky.get("StarCount")?.asFloat ?? 3000)
+            if let o = sky.get("SkyboxOrientation")?.asVector3 { skyboxOri = SIMD3(o.x, o.y, o.z) }
+            let faces = ["SkyboxFt", "SkyboxBk", "SkyboxRt", "SkyboxLf", "SkyboxUp", "SkyboxDn"].map {
+                (sky.get($0)?.asURI ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+            if faces.allSatisfy({ !$0.isEmpty && !$0.hasPrefix("rbxasset://") }) {
+                skyboxURIs = faces
+            }
+        }
+
+        return Lighting(
+            sunDir: sunDir, trueSunDir: rawSun, sunColor: sunColor,
+            ambient: ambScalar, ambientTint: ambientTint, exposure: exposure,
+            horizon: horizon, zenith: zenith,
+            fogColor: fogColor, fogStart: fogStart, fogEnd: fogEnd,
+            atmoDensity: atmoDensity, atmoHaze: atmoHaze, atmoGlare: atmoGlare, atmoOffset: atmoOffset,
+            globalShadows: globalShadows, dayFactor: dayFactor,
+            starCount: starCount, celestialShown: celestialShown,
+            skyboxURIs: skyboxURIs, skyboxOrientation: skyboxOri)
     }
 
     // MARK: selection & picking

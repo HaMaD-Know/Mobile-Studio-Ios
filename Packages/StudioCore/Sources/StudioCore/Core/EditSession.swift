@@ -12,6 +12,7 @@ public final class UndoManager {
     private var redoStack: [Step] = []
     private var batch: [Op]?
     private var batchLabel = ""
+    private var batchDepth = 0
     public var suspended = false
     /// Called after any change to history (to mark the document dirty / refresh UI).
     var onChange: () -> Void = {}
@@ -24,12 +25,16 @@ public final class UndoManager {
     public var redoLabel: String? { redoStack.last?.label }
 
     public func begin(_ label: String) {
-        if batch == nil { batch = []; batchLabel = label }
+        if batchDepth == 0 { batch = []; batchLabel = label }
+        batchDepth += 1
     }
     public func commit() {
-        guard let b = batch else { return }
-        batch = nil
-        if !b.isEmpty { push(Step(label: batchLabel, ops: b)) }
+        guard batchDepth > 0 else { return }
+        batchDepth -= 1
+        if batchDepth == 0, let b = batch {
+            batch = nil
+            if !b.isEmpty { push(Step(label: batchLabel, ops: b)) }
+        }
     }
     public func record(_ op: Op) {
         if suspended { return }
@@ -41,7 +46,7 @@ public final class UndoManager {
         redoStack.removeAll()
         onChange()
     }
-    public func clear() { undoStack.removeAll(); redoStack.removeAll(); batch = nil }
+    public func clear() { undoStack.removeAll(); redoStack.removeAll(); batch = nil; batchDepth = 0 }
 
     @discardableResult public func undo() -> String? {
         guard let s = undoStack.popLast() else { return nil }
@@ -160,8 +165,54 @@ public final class EditSession {
         let had = inst.props.contains(name)
         let old = inst.props[name]
         if had && old == value { return }
+        undo.begin("Edit \(name)")
+        defer { undo.commit() }
         inst.set(name, value)
         undo.record(.prop(inst: inst, name: name, old: old, new: value))
+
+        func sync(_ partner: String, _ pv: PropValue, typeHint: Int? = nil) {
+            let pHad = inst.props.contains(partner)
+            let pOld = inst.props[partner]
+            if pHad && pOld == pv { return }
+            if let t = typeHint, inst.propTypes[partner] == nil { inst.propTypes[partner] = t }
+            inst.set(partner, pv)
+            undo.record(.prop(inst: inst, name: partner, old: pOld, new: pv))
+        }
+
+        if inst.className == "Lighting" {
+            if name == "ClockTime", let c = value.asFloat {
+                var h = c.truncatingRemainder(dividingBy: 24)
+                if h < 0 { h += 24 }
+                var total = Int((h * 3600).rounded())
+                total = ((total % 86400) + 86400) % 86400
+                let hh = total / 3600, mm = (total / 60) % 60, ss = total % 60
+                sync("TimeOfDay", .string(String(format: "%02d:%02d:%02d", hh, mm, ss)))
+            } else if name == "TimeOfDay", let s = value.asString {
+                let parts = s.trimmingCharacters(in: .whitespaces).split(separator: ":")
+                if parts.count >= 2, let h = Int(parts[0]), let m = Int(parts[1]) {
+                    let sec = parts.count >= 3 ? (Int(parts[2]) ?? 0) : 0
+                    let wrappedH = ((h % 24) + 24) % 24
+                    let clampedM = Swift.max(0, Swift.min(59, m))
+                    let clampedS = Swift.max(0, Swift.min(59, sec))
+                    let hours = Float(wrappedH) + Float(clampedM) / 60 + Float(clampedS) / 3600
+                    sync("ClockTime", .float(hours))
+                }
+            }
+        } else if inst.isA("BasePart") {
+            if name == "BrickColor", case .brickColor(let bc) = value {
+                let c = bc.color
+                sync("Color3uint8", .color3(c), typeHint: PropType.COLOR3U8)
+                if inst.props.contains("Color") { sync("Color", .color3(c), typeHint: PropType.COLOR3) }
+            } else if (name == "Color3uint8" || name == "Color"), case .color3(let c) = value {
+                let bc = BrickColorV(Int32(BrickColors.closest(c)))
+                sync("BrickColor", .brickColor(bc), typeHint: PropType.BRICKCOLOR)
+                if name == "Color" {
+                    sync("Color3uint8", .color3(c), typeHint: PropType.COLOR3U8)
+                } else if inst.props.contains("Color") {
+                    sync("Color", .color3(c), typeHint: PropType.COLOR3)
+                }
+            }
+        }
     }
 
     /// Record a change that was already applied live (e.g. during a drag).
@@ -291,11 +342,24 @@ public final class EditSession {
     public func serializePlace() -> Data { RbxBinaryWriter.write(model.children, meta: model.meta) }
     public func serializeSelection() -> Data { RbxBinaryWriter.write(selection.filter(deletable), meta: OrderedDict()) }
 
-    /// Insert a model file (.rbxm/.rbxmx) under `parent` (or Workspace).
+    private func defaultParent(for root: Instance) -> Instance {
+        let cls = root.className
+        if cls == "Sky" || cls == "Atmosphere" || cls == "Clouds" || ClassDb.isA(cls, "PostEffect") {
+            return model.getService("Lighting")
+        }
+        if cls == "ScreenGui" {
+            return model.getService("StarterGui")
+        }
+        if cls == "MaterialVariant" {
+            return model.getService("MaterialService")
+        }
+        return model.workspace
+    }
+
+    /// Insert a model file (.rbxm/.rbxmx) under `parent` (or smart service target).
     public func insertDocument(_ doc: RbxDocument, into parent: Instance? = nil) {
-        let target = parent ?? model.workspace
         undo.begin("Insert model")
-        for r in doc.roots { try? reparent(r, target) }
+        for r in doc.roots { try? reparent(r, parent ?? defaultParent(for: r)) }
         undo.commit()
         select(doc.roots)
     }

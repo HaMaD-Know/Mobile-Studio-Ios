@@ -141,6 +141,11 @@ struct PropertyRow: View {
             StudioCheckbox(isOn: Binding(get: { b }, set: { set(.bool($0)) }))
         case .string(let s):
             CommitField(text: s) { set(.string($0)) }
+        case .content(let cv):
+            CommitField(text: cv.uri) { t in
+                let s = t.trimmingCharacters(in: .whitespaces)
+                set(.content(ContentValue(sourceType: s.isEmpty ? 0 : 1, uri: s)))
+            }
         case .int(let n):
             NumberField(value: Double(n)) { set(.int(Int32(clamping: Int($0)))) }
         case .int64(let n):
@@ -149,8 +154,74 @@ struct PropertyRow: View {
             NumberField(value: Double(f)) { set(.float(Float($0))) }
         case .double(let d):
             NumberField(value: d) { set(.double($0)) }
+        case .vector2(let v):
+            HStack(spacing: 6) {
+                HStack(spacing: 2) {
+                    Text("X").font(.caption.bold()).foregroundStyle(.red)
+                    NumberField(value: Double(v.x)) { set(.vector2(Vector2(Float($0), v.y))) }
+                        .padding(.horizontal, 4).padding(.vertical, 3)
+                        .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 5))
+                }
+                HStack(spacing: 2) {
+                    Text("Y").font(.caption.bold()).foregroundStyle(.green)
+                    NumberField(value: Double(v.y)) { set(.vector2(Vector2(v.x, Float($0)))) }
+                        .padding(.horizontal, 4).padding(.vertical, 3)
+                        .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 5))
+                }
+            }
         case .vector3(let v):
             CommitField(text: Self.fmt(v)) { if let nv = Self.parse3($0) { set(.vector3(nv)) } }
+        case .udim(let u):
+            HStack(spacing: 6) {
+                HStack(spacing: 2) {
+                    Text("S").font(.caption.bold()).foregroundStyle(Th.dim)
+                    NumberField(value: Double(u.scale)) { set(.udim(UDim(Float($0), u.offset))) }
+                        .padding(.horizontal, 4).padding(.vertical, 3)
+                        .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 5))
+                }
+                HStack(spacing: 2) {
+                    Text("O").font(.caption.bold()).foregroundStyle(Th.dim)
+                    NumberField(value: Double(u.offset)) { set(.udim(UDim(u.scale, Int32($0.rounded())))) }
+                        .padding(.horizontal, 4).padding(.vertical, 3)
+                        .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 5))
+                }
+            }
+        case .udim2(let u):
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 4) {
+                    Text("X").font(.caption.bold()).foregroundStyle(.red)
+                    NumberField(value: Double(u.x.scale)) { set(.udim2(UDim2(Float($0), u.x.offset, u.y.scale, u.y.offset))) }
+                        .padding(.horizontal, 4).padding(.vertical, 2)
+                        .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 4))
+                    NumberField(value: Double(u.x.offset)) { set(.udim2(UDim2(u.x.scale, Int32($0.rounded()), u.y.scale, u.y.offset))) }
+                        .padding(.horizontal, 4).padding(.vertical, 2)
+                        .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 4))
+                }
+                HStack(spacing: 4) {
+                    Text("Y").font(.caption.bold()).foregroundStyle(.green)
+                    NumberField(value: Double(u.y.scale)) { set(.udim2(UDim2(u.x.scale, u.x.offset, Float($0), u.y.offset))) }
+                        .padding(.horizontal, 4).padding(.vertical, 2)
+                        .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 4))
+                    NumberField(value: Double(u.y.offset)) { set(.udim2(UDim2(u.x.scale, u.x.offset, u.y.scale, Int32($0.rounded())))) }
+                        .padding(.horizontal, 4).padding(.vertical, 2)
+                        .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 4))
+                }
+            }
+        case .numberRange(let r):
+            HStack(spacing: 6) {
+                HStack(spacing: 2) {
+                    Text("Min").font(.caption.bold()).foregroundStyle(Th.dim)
+                    NumberField(value: Double(r.min)) { let m = Float($0); set(.numberRange(NumberRange(m, max(m, r.max)))) }
+                        .padding(.horizontal, 4).padding(.vertical, 3)
+                        .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 5))
+                }
+                HStack(spacing: 2) {
+                    Text("Max").font(.caption.bold()).foregroundStyle(Th.dim)
+                    NumberField(value: Double(r.max)) { let m = Float($0); set(.numberRange(NumberRange(min(r.min, m), m))) }
+                        .padding(.horizontal, 4).padding(.vertical, 3)
+                        .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 5))
+                }
+            }
         case .cframe(let cf):
             CommitField(text: Self.fmt(cf.position)) { if let p = Self.parse3($0) { set(.cframe(cf.withPosition(p))) } }
         case .color3(let c):
