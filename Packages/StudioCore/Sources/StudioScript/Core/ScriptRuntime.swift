@@ -826,8 +826,13 @@ public protocol ScriptHost: AnyObject {
     func raycast(origin: Vector3, direction: Vector3, params: RaycastParamsV?) -> RaycastResultV?
     func velocity(of part: Instance) -> Vector3
     func setVelocity(of part: Instance, _ v: Vector3)
+    func angularVelocity(of part: Instance) -> Vector3
+    func setAngularVelocity(of part: Instance, _ v: Vector3)
+    func assemblyRoot(of part: Instance) -> Instance
+    func assemblyMass(of part: Instance) -> Float
     func applyImpulse(_ part: Instance, _ impulse: Vector3)
     func touchingParts(_ part: Instance) -> [Instance]
+    func sit(_ seat: Instance, _ humanoid: Instance)
     func humanoidMove(_ humanoid: Instance, direction: Vector3)
     func humanoidMoveTo(_ humanoid: Instance, target: Vector3)
     func humanoidJump(_ humanoid: Instance)

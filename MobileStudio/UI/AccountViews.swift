@@ -422,10 +422,27 @@ enum ModelMathApp {
         var lo = Vector3(.greatestFiniteMagnitude, .greatestFiniteMagnitude, .greatestFiniteMagnitude), hi = -lo
         for q in parts {
             let cf = PartData.cframe(q), h = PartData.size(q) * 0.5
-            lo = lo.min(cf.position - h); hi = hi.max(cf.position + h)
+            let ext = Vector3(
+                abs(cf.r00) * h.x + abs(cf.r01) * h.y + abs(cf.r02) * h.z,
+                abs(cf.r10) * h.x + abs(cf.r11) * h.y + abs(cf.r12) * h.z,
+                abs(cf.r20) * h.x + abs(cf.r21) * h.y + abs(cf.r22) * h.z
+            )
+            lo = lo.min(cf.position - ext); hi = hi.max(cf.position + ext)
         }
-        let delta = Vector3(p.x - (lo.x + hi.x) / 2, p.y - lo.y, p.z - (lo.z + hi.z) / 2)
+        let delta = Vector3(p.x - (lo.x + hi.x) / 2, (p.y + 0.2) - lo.y, p.z - (lo.z + hi.z) / 2)
         for q in parts { PartData.setCFrame(q, PartData.cframe(q) + delta) }
+        var shiftedModels = Set<ObjectIdentifier>()
+        for q in parts {
+            var cur = q.parent
+            while let m = cur {
+                if m.isA("Model"), shiftedModels.insert(ObjectIdentifier(m)).inserted {
+                    if case .optionalCFrame(let opt)? = m.props["WorldPivotData"], let wp = opt.value {
+                        m.set("WorldPivotData", .optionalCFrame(OptionalCFrame(wp + delta)))
+                    }
+                }
+                cur = m.parent
+            }
+        }
     }
 }
 

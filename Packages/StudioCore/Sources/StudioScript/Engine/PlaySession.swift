@@ -36,7 +36,16 @@ public final class PlaySession: ScriptHost {
     private var deadTimer: Float?
     private var touching = Set<PairKey>()
     private var seat: Instance?
+    private var seatCooldown: Float = 0
+    private var virtualKeys = Set<String>()
+    private var lastCamDrag: Double = -10
     private var tracks: [AnimTrackRef] = []
+
+    public var seatedVehicle: Instance? { seat?.className == "VehicleSeat" ? seat : nil }
+    public var vehicleSpeed: Float {
+        guard let s = seatedVehicle, let v = physics.body(of: s)?.velocity else { return 0 }
+        return Vector3(v.x, 0, v.z).magnitude
+    }
 
     // HUD state the app reads
     public private(set) var nearestPrompt: Instance?
@@ -110,6 +119,8 @@ public final class PlaySession: ScriptHost {
     public func stop() {
         guard running else { return }
         running = false
+        seat = nil
+        virtualKeys.removeAll()
         rt.fire(dm, "Close")
         rt.shutdown()
         onOutput(.info, "Playtest stopped")
@@ -211,19 +222,28 @@ public final class PlaySession: ScriptHost {
 
     // MARK: TreeListener forwarding from the runtime
 
+    private static func isPhysicsObject(_ i: Instance) -> Bool {
+        i.isA("BasePart") || i.isA("JointInstance") || i.className == "WeldConstraint"
+            || i.isA("Constraint") || i.isA("BodyMover") || i.className == "Attachment"
+    }
+
     public func childAdded(_ parent: Instance, _ child: Instance) {
         maybeRunScript(child)
         for d in child.descendants() { maybeRunScript(d) }
-        if child.isA("BasePart") || child.isA("JointInstance") || child.className == "WeldConstraint" || child.descendants().contains(where: { $0.isA("BasePart") }) {
+        if Self.isPhysicsObject(child) || child.descendants().contains(where: { Self.isPhysicsObject($0) }) {
             physics.dirty = true
         }
     }
     public func childRemoved(_ parent: Instance, _ child: Instance) {
-        if child.isA("BasePart") || child.isA("JointInstance") || child.className == "WeldConstraint" || !child.children.isEmpty { physics.dirty = true }
+        if Self.isPhysicsObject(child) || !child.children.isEmpty { physics.dirty = true }
         if child === character { character = nil }
+        if child === seat { seat = nil; virtualKeys.removeAll() }
     }
     public func propChanged(_ inst: Instance, _ name: String) {
-        if name == "Anchored" || name == "CanCollide" || name == "Part0" || name == "Part1" || name == "Enabled" { physics.dirty = true }
+        if name == "Anchored" || name == "CanCollide" || name == "Part0" || name == "Part1"
+            || name == "Attachment0" || name == "Attachment1" || name == "Enabled" || name == "Disabled" || name == "Massless" {
+            physics.dirty = true
+        }
         if inst.isA("BasePart"), name == "CFrame" || name == "size" || name == "Size" { physics.moved(inst) }
     }
 
@@ -269,6 +289,8 @@ public final class PlaySession: ScriptHost {
         charVelocity = .zero
         deadTimer = nil
         seat = nil
+        seatCooldown = 0
+        virtualKeys.removeAll()
         p.set("Character", .ref(ch))
         try? ch.setParent(dm.workspace)
         resetGui(initial: false)
@@ -317,6 +339,7 @@ public final class PlaySession: ScriptHost {
         stepCharacter(dt)
         physics.step(dt, gravity: dm.workspace.get("Gravity")?.asFloat ?? 196.2, exclude: character)
         physics.solveJoints()
+        if let s = seat, let ch = character, s.parent != nil { syncCharacterToSeat(ch, s) }
         checkTouches()
         killFallen()
         rt.fire(runService, "PostSimulation", [.number(Double(dt))])
@@ -342,11 +365,20 @@ public final class PlaySession: ScriptHost {
             if deadTimer == nil { die() }
             return
         }
+        if seatCooldown > 0 { seatCooldown = max(0, seatCooldown - dt) }
         if let s = seat {
-            // Seated: follow the seat, jump leaves it.
-            let cf = PartData.cframe(s) * CFrame.at(Vector3(0, PartData.size(s).y / 2 + 1.5, 0))
-            ModelMath.pivotTo(character!, cf)
-            if jumpRequested || hum.get("Jump")?.asBool == true { leaveSeat(hum) }
+            if s.parent == nil || s.get("Occupant")?.asInstance !== hum || hum.get("Sit")?.asBool == false {
+                leaveSeat(hum, jump: false)
+                jumpRequested = false
+                return
+            }
+            if jumpRequested || hum.get("Jump")?.asBool == true {
+                leaveSeat(hum, jump: true)
+                jumpRequested = false
+                return
+            }
+            syncCharacterToSeat(character!, s)
+            if s.className == "VehicleSeat" { stepVehicle(dt, seat: s) }
             jumpRequested = false
             return
         }
@@ -404,31 +436,175 @@ public final class PlaySession: ScriptHost {
             if !grounded { rt.fire(hum, "FreeFalling", [.bool(true)]) }
         }
         rt.fire(hum, "Running", [.number(Double(dir.magnitude * walkSpeed))])
-        if let gp = groundPart, gp.className == "Seat" || gp.className == "VehicleSeat", gp.get("Disabled")?.asBool != true,
-           gp.get("Occupant")?.asInstance == nil, dir.magnitude < 0.1 {
-            sit(hum, gp)
+        if seat == nil && seatCooldown <= 0 {
+            trySit(hum, rootCF: cf, groundPart: groundPart)
         }
     }
 
     private func stateItem(_ v: Int) -> ScriptValue { .object(.enumItem(ScriptEnums.item("HumanoidStateType", value: v) ?? ScriptEnums.item("HumanoidStateType", value: 8)!)) }
+
+    private func syncCharacterToSeat(_ ch: Instance, _ s: Instance) {
+        let targetCF = PartData.cframe(s) * CFrame.at(Vector3(0, PartData.size(s).y / 2 + 1.5, 0))
+        if let root = rootPart {
+            let delta = targetCF * PartData.cframe(root).inverse
+            for p in ModelMath.parts(ch) { PartData.setCFrame(p, delta * PartData.cframe(p)) }
+        } else {
+            ModelMath.pivotTo(ch, targetCF)
+        }
+        physics.solveJoints(only: ch)
+    }
+
+    private func trySit(_ hum: Instance, rootCF: CFrame, groundPart: Instance?) {
+        func canUse(_ s: Instance) -> Bool {
+            (s.className == "Seat" || s.className == "VehicleSeat")
+                && s.get("Disabled")?.asBool != true
+                && s.get("Occupant")?.asInstance == nil
+        }
+        if let gp = groundPart, canUse(gp) {
+            sit(hum, gp)
+            return
+        }
+        let pos = rootCF.position
+        let nearby = physics.query((pos - Vector3(1.25, 3.2, 1.25), pos + Vector3(1.25, 2.0, 1.25))).filter(canUse)
+        if let closest = nearby.min(by: { (PartData.cframe($0).position - pos).magnitude < (PartData.cframe($1).position - pos).magnitude }) {
+            sit(hum, closest)
+        }
+    }
 
     private func sit(_ hum: Instance, _ s: Instance) {
         seat = s
         s.set("Occupant", .ref(hum))
         hum.set("Sit", .bool(true))
         hum.set("SeatPart", .ref(s))
+        if let ch = character { syncCharacterToSeat(ch, s) }
         rt.fire(hum, "Seated", [.bool(true), .object(.instance(s))])
     }
 
-    private func leaveSeat(_ hum: Instance) {
+    private func leaveSeat(_ hum: Instance, jump: Bool = true) {
         guard let s = seat else { return }
         seat = nil
+        seatCooldown = 1.0
+        updateVirtualKeys(throttle: 0, steer: 0)
+        if s.className == "VehicleSeat" {
+            s.set("Throttle", .int(0))
+            s.set("ThrottleFloat", .float(0))
+            s.set("Steer", .int(0))
+            s.set("SteerFloat", .float(0))
+        }
         s.set("Occupant", .ref(nil))
-        hum.set("Sit", .bool(false))
-        hum.set("SeatPart", .ref(nil))
-        if let root = rootPart { PartData.setCFrame(root, PartData.cframe(root) + Vector3(0, 3, 0)) }
-        charVelocity.y = 30
+        hum.set("Sit", .bool(false), notify: false)
+        hum.set("SeatPart", .ref(nil), notify: false)
+        hum.set("Jump", .bool(false), notify: false)
+        if jump, let root = rootPart {
+            let sCF = PartData.cframe(s)
+            var exitPos = sCF.position + Vector3(0, PartData.size(s).y * 0.5 + 3.2, 0)
+            if physics.raycastStatic(origin: sCF.position, direction: Vector3(0, 3.5, 0)) != nil {
+                exitPos += sCF.rightVector * 3.5
+            }
+            PartData.setCFrame(root, sCF.rotationOnly.withPosition(exitPos))
+            charVelocity.y = 35
+            grounded = false
+        }
         rt.fire(hum, "Seated", [.bool(false), .nil_])
+    }
+
+    private func updateVirtualKeys(throttle: Int32, steer: Int32) {
+        var desired = Set<String>()
+        if throttle > 0 { desired.insert("W") } else if throttle < 0 { desired.insert("S") }
+        if steer < 0 { desired.insert("A") } else if steer > 0 { desired.insert("D") }
+        for k in virtualKeys where !desired.contains(k) { fireInput(k, began: false) }
+        for k in desired where !virtualKeys.contains(k) { fireInput(k, began: true) }
+        virtualKeys = desired
+    }
+
+    private func hasActiveLinearMover(in body: PhysicsWorld.Body) -> Bool {
+        let partSet = Set(body.parts.map(ObjectIdentifier.init))
+        for m in physics.movers where m.parent != nil && m.get("Enabled")?.asBool != false {
+            let host = m.parent.flatMap { $0.isA("BasePart") ? $0 : nil } ?? m.get("Attachment0")?.asInstance?.parent
+            guard let host, partSet.contains(ObjectIdentifier(host)) else { continue }
+            switch m.className {
+            case "BodyVelocity":
+                let mf = m.get("MaxForce")?.asVector3 ?? .zero
+                let v = m.get("Velocity")?.asVector3 ?? .zero
+                if (mf.x > 1 || mf.z > 1) && Vector3(v.x, 0, v.z).magnitude > 0.1 { return true }
+            case "LinearVelocity":
+                let mf = m.get("MaxForce")?.asFloat ?? 0
+                let v = m.get("VectorVelocity")?.asVector3 ?? .zero
+                let lv = abs(m.get("LineVelocity")?.asFloat ?? 0)
+                if mf > 1 && (Vector3(v.x, 0, v.z).magnitude > 0.1 || lv > 0.1) { return true }
+            case "BodyForce", "BodyThrust", "VectorForce":
+                let f = m.get("Force")?.asVector3 ?? .zero
+                if Vector3(f.x, 0, f.z).magnitude > 1 { return true }
+            case "RocketPropulsion":
+                if (m.get("MaxThrust")?.asFloat ?? 0) > 1 { return true }
+            default: break
+            }
+        }
+        return false
+    }
+
+    private func stepVehicle(_ dt: Float, seat s: Instance) {
+        let throttleF: Float = controlsEnabled ? max(-1, min(1, moveInput.y)) : 0
+        let steerF: Float = controlsEnabled ? max(-1, min(1, moveInput.x)) : 0
+        let throttle: Int32 = throttleF > 0.15 ? 1 : (throttleF < -0.15 ? -1 : 0)
+        let steer: Int32 = steerF > 0.15 ? 1 : (steerF < -0.15 ? -1 : 0)
+
+        s.set("Throttle", .int(throttle))
+        s.set("ThrottleFloat", .float(throttleF))
+        s.set("Steer", .int(steer))
+        s.set("SteerFloat", .float(steerF))
+        updateVirtualKeys(throttle: throttle, steer: steer)
+
+        guard let body = physics.body(of: s), !hasActiveLinearMover(in: body) else { return }
+
+        var maxSpeed = max(8, s.get("MaxSpeed")?.asFloat ?? 25)
+        let partSet = Set(body.parts.map(ObjectIdentifier.init))
+        for d in dm.workspace.descendants() where d.className == "HingeConstraint" || d.className == "CylindricalConstraint" {
+            guard d.get("ActuatorType")?.asEnum == 1,
+                  (d.get("MotorMaxTorque")?.asFloat ?? 0) > 0 || (d.get("MotorMaxForce")?.asFloat ?? 0) > 0,
+                  let p0 = d.get("Attachment0")?.asInstance?.parent,
+                  let p1 = d.get("Attachment1")?.asInstance?.parent,
+                  partSet.contains(ObjectIdentifier(p0)) || partSet.contains(ObjectIdentifier(p1)),
+                  let av = d.get("AngularVelocity")?.asFloat, abs(av) > 0.5 else { continue }
+            maxSpeed = max(maxSpeed, min(140, abs(av) * 1.6))
+        }
+
+        let torque = max(2, s.get("Torque")?.asFloat ?? 10)
+        let turnSpeed = max(0.5, s.get("TurnSpeed")?.asFloat ?? 1)
+        let look = PartData.cframe(s).lookVector
+        var fwd = Vector3(look.x, 0, look.z)
+        fwd = fwd.magnitude > 1e-4 ? fwd.unit : Vector3(0, 0, -1)
+        let right = Vector3(-fwd.z, 0, fwd.x)
+
+        var fwdSpeed = body.velocity.dot(fwd)
+        var latSpeed = body.velocity.dot(right)
+        if abs(throttleF) > 0.05 {
+            let target = throttleF * (throttleF < 0 ? maxSpeed * 0.65 : maxSpeed)
+            let reversing = (target > 0 && fwdSpeed < -0.5) || (target < 0 && fwdSpeed > 0.5)
+            let accel = max(18, min(140, torque * 3.5)) * (reversing ? 1.6 : 1.0)
+            let diff = target - fwdSpeed
+            let stepDV = max(-accel * dt, min(accel * dt, diff))
+            fwdSpeed += stepDV
+        } else {
+            fwdSpeed *= max(0, 1 - dt * 2.5)
+            if abs(fwdSpeed) < 0.08 { fwdSpeed = 0 }
+        }
+        latSpeed *= max(0, 1 - dt * 10)
+        let vy = body.velocity.y
+        body.velocity = fwd * fwdSpeed + right * latSpeed
+        body.velocity.y = vy
+
+        if abs(steerF) > 0.05 && (abs(fwdSpeed) > 0.5 || abs(throttleF) > 0.05) {
+            let dirSign: Float = fwdSpeed < -0.5 ? -1 : 1
+            let speedScale = max(0.35, min(1.0, abs(fwdSpeed) / 10.0))
+            let yawDelta = -steerF * dirSign * min(4.2, max(0.9, turnSpeed * 1.6)) * speedScale * dt
+            physics.rotateBody(body, around: PartData.cframe(s).position, yawDelta: yawDelta)
+        }
+        body.driven = true
+        if abs(throttleF) > 0.05 || abs(steerF) > 0.05 || abs(fwdSpeed) > 0.2 {
+            body.asleep = false
+            body.restTime = 0
+        }
     }
 
     private func die() {
@@ -513,6 +689,15 @@ public final class PlaySession: ScriptHost {
             focus = cameraCFrame.position + cameraCFrame.lookVector * camDistance
         }
         if let hum = humanoid, let off = hum.get("CameraOffset")?.asVector3 { focus += off }
+        if let s = seatedVehicle, rt.time - lastCamDrag > 1.2, vehicleSpeed > 2 {
+            let look = PartData.cframe(s).lookVector
+            if Vector3(look.x, 0, look.z).magnitude > 0.1 {
+                let targetYaw = atan2(-look.x, -look.z)
+                var diff = (targetYaw - camYaw).truncatingRemainder(dividingBy: 2 * .pi)
+                if diff > .pi { diff -= 2 * .pi } else if diff < -.pi { diff += 2 * .pi }
+                camYaw += diff * (1 - exp(-dt * 2.5))
+            }
+        }
         let rot = CFrame.ry(camYaw) * CFrame.rx(camPitch)
         var dist = camDistance
         let back = rot.backVector
@@ -523,13 +708,14 @@ public final class PlaySession: ScriptHost {
         fieldOfView = cam.get("FieldOfView")?.asFloat ?? 70
         cam.set("CFrame", .cframe(cameraCFrame), notify: false)
         cam.set("Focus", .cframe(.at(focus)), notify: false)
-        if shiftLock, let root = rootPart {
+        if shiftLock, seat == nil, let root = rootPart {
             let p = PartData.cframe(root).position
             PartData.setCFrame(root, CFrame.lookAt(p, p + Vector3(cameraCFrame.lookVector.x, 0, cameraCFrame.lookVector.z)))
         }
     }
 
     public func cameraDrag(dx: Float, dy: Float) {
+        lastCamDrag = rt.time
         camYaw -= dx * 0.008
         camPitch = max(-1.4, min(1.4, camPitch - dy * 0.008))
     }
@@ -918,11 +1104,33 @@ public final class PlaySession: ScriptHost {
         physics.body(of: part)?.velocity = v
         physics.body(of: part)?.asleep = false
     }
+    public func angularVelocity(of part: Instance) -> Vector3 {
+        physics.body(of: part)?.angularVelocity ?? part.get("RotVelocity")?.asVector3 ?? .zero
+    }
+    public func setAngularVelocity(of part: Instance, _ v: Vector3) {
+        if let b = physics.body(of: part) { b.angularVelocity = v; b.asleep = false }
+        part.set("RotVelocity", .vector3(v), notify: false)
+    }
+    public func assemblyRoot(of part: Instance) -> Instance {
+        physics.body(of: part)?.root ?? part
+    }
+    public func assemblyMass(of part: Instance) -> Float {
+        physics.body(of: part)?.mass ?? Physics.mass(part)
+    }
     public func applyImpulse(_ part: Instance, _ impulse: Vector3) {
         if let ch = character, part.isDescendant(of: ch) { charVelocity += impulse / 10; grounded = false; return }
         guard let b = physics.body(of: part) else { return }
         b.velocity += impulse / max(b.mass, 0.01)
         b.asleep = false
+    }
+    public func sit(_ seatPart: Instance, _ hum: Instance) {
+        guard hum === humanoid,
+              seatPart.get("Disabled")?.asBool != true else { return }
+        let occ = seatPart.get("Occupant")?.asInstance
+        if occ != nil && occ !== hum { return }
+        if seat === seatPart { return }
+        if seat != nil { leaveSeat(hum, jump: false) }
+        sit(hum, seatPart)
     }
     public func humanoidMove(_ humanoid: Instance, direction: Vector3) {
         guard humanoid === self.humanoid else { return }
@@ -987,6 +1195,6 @@ public final class PlaySession: ScriptHost {
         let sx = (nx + 1) / 2 * viewport.x, sy = (1 - ny) / 2 * viewport.y
         return (Vector3(sx, sy, depth), abs(nx) <= 1 && abs(ny) <= 1)
     }
-    public func keyDown(_ key: String) -> Bool { false }
+    public func keyDown(_ key: String) -> Bool { virtualKeys.contains(key) }
     public func respawn(_ player: Instance) { if player === self.player { spawnCharacter() } }
 }

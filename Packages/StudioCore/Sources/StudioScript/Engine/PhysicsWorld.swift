@@ -5,13 +5,27 @@ import StudioCore
 /// unanchored parts joined by welds/motors form assemblies that fall under gravity and collide
 /// (translation only) with everything else; characters use a kinematic box mover.
 final class PhysicsWorld {
+    static let holdTogetherConstraints: Set<String> = [
+        "RigidConstraint", "HingeConstraint", "BallSocketConstraint", "CylindricalConstraint",
+        "PrismaticConstraint", "UniversalConstraint", "TorsionSpringConstraint", "PlaneConstraint", "SpringConstraint",
+    ]
+    static let moverClasses: Set<String> = [
+        "BodyForce", "BodyThrust", "BodyVelocity", "BodyPosition", "BodyGyro", "BodyAngularVelocity",
+        "RocketPropulsion", "VectorForce", "LineForce", "LinearVelocity", "AngularVelocity", "AlignPosition", "AlignOrientation",
+    ]
+
+    struct PairKey: Hashable { let a: ObjectIdentifier; let b: ObjectIdentifier }
+
     final class Body {
         let root: Instance
         var parts: [Instance]
         var velocity = Vector3.zero
+        var angularVelocity = Vector3.zero
         var mass: Float = 1
         var asleep = false
         var restTime: Float = 0
+        var grounded = false
+        var driven = false
         init(root: Instance, parts: [Instance]) { self.root = root; self.parts = parts }
     }
 
@@ -34,6 +48,8 @@ final class PhysicsWorld {
     private var gridOf: [ObjectIdentifier: [Int64]] = [:]
     private let cell: Float = 8
     private var characterParts = Set<ObjectIdentifier>()
+    private var noCollidePairs = Set<PairKey>()
+    private(set) var movers: [Instance] = []
     /// Workspace.Terrain and its voxels (collides with characters and raycasts).
     private(set) var terrain: Instance?
     private var terrainGrid: TerrainGrid?
@@ -45,7 +61,13 @@ final class PhysicsWorld {
 
     func rebuild(_ ws: Instance, character: Instance?) {
         dirty = false
-        bodies.removeAll(); bodyOf.removeAll(); joints.removeAll(); solveOrder.removeAll(); partsById.removeAll(); grid.removeAll(); gridOf.removeAll()
+        var savedVel: [ObjectIdentifier: (Vector3, Vector3, Bool)] = [:]
+        for b in bodies {
+            for p in b.parts { savedVel[ObjectIdentifier(p)] = (b.velocity, b.angularVelocity, b.asleep) }
+        }
+        bodies.removeAll(); bodyOf.removeAll(); joints.removeAll(); solveOrder.removeAll()
+        partsById.removeAll(); grid.removeAll(); gridOf.removeAll()
+        noCollidePairs.removeAll(); movers.removeAll()
         characterParts = Set(character?.descendants().filter { $0.isA("BasePart") }.map(ObjectIdentifier.init) ?? [])
         let parts = ws.descendants().filter {
             $0.isA("BasePart") && $0.className != "Terrain" && $0.className != "NegateOperation" && !SolidModeling.isHiddenSource($0)
@@ -54,7 +76,7 @@ final class PhysicsWorld {
         terrainGrid = terrain.flatMap { TerrainStore.hasVoxels($0) ? TerrainStore.of($0) : nil }
         for p in parts { partsById[ObjectIdentifier(p)] = p; insertGrid(p) }
 
-        // Joints and union-find of connected parts.
+        // Joints, constraints, NoCollisionConstraints, and movers across the workspace.
         var parent: [ObjectIdentifier: ObjectIdentifier] = [:]
         func find(_ x: ObjectIdentifier) -> ObjectIdentifier {
             var r = x
@@ -63,13 +85,32 @@ final class PhysicsWorld {
         }
         func union(_ a: ObjectIdentifier, _ b: ObjectIdentifier) { parent[find(a)] = find(b) }
         for p in parts { parent[ObjectIdentifier(p)] = ObjectIdentifier(p) }
-        for j in ws.descendants() where (j.isA("JointInstance") || j.className == "WeldConstraint") && j.get("Enabled")?.asBool != false {
-            let p0 = (j.get("Part0") ?? j.get("Part0Internal"))?.asInstance
-            let p1 = (j.get("Part1") ?? j.get("Part1Internal"))?.asInstance
-            guard let a = p0, let b = p1, partsById[ObjectIdentifier(a)] != nil, partsById[ObjectIdentifier(b)] != nil else { continue }
-            let rel: CFrame? = j.className == "WeldConstraint" ? PartData.cframe(a).inverse * PartData.cframe(b) : nil
-            joints.append(Joint(inst: j, p0: a, p1: b, rel: rel))
-            union(ObjectIdentifier(a), ObjectIdentifier(b))
+
+        for j in ws.descendants() {
+            if (j.isA("JointInstance") || j.className == "WeldConstraint") && j.get("Enabled")?.asBool != false {
+                let p0 = (j.get("Part0") ?? j.get("Part0Internal"))?.asInstance
+                let p1 = (j.get("Part1") ?? j.get("Part1Internal"))?.asInstance
+                guard let a = p0, let b = p1, partsById[ObjectIdentifier(a)] != nil, partsById[ObjectIdentifier(b)] != nil else { continue }
+                let rel: CFrame? = j.className == "WeldConstraint" ? PartData.cframe(a).inverse * PartData.cframe(b) : nil
+                joints.append(Joint(inst: j, p0: a, p1: b, rel: rel))
+                union(ObjectIdentifier(a), ObjectIdentifier(b))
+            } else if Self.holdTogetherConstraints.contains(j.className) && j.get("Enabled")?.asBool != false {
+                let a = j.get("Attachment0")?.asInstance?.parent
+                let b = j.get("Attachment1")?.asInstance?.parent
+                guard let a, let b, partsById[ObjectIdentifier(a)] != nil, partsById[ObjectIdentifier(b)] != nil else { continue }
+                if j.className == "SpringConstraint" && (a.get("Anchored")?.asBool == true || b.get("Anchored")?.asBool == true) {
+                    continue
+                }
+                union(ObjectIdentifier(a), ObjectIdentifier(b))
+            } else if j.className == "NoCollisionConstraint" && j.get("Enabled")?.asBool != false {
+                if let a = j.get("Part0")?.asInstance, let b = j.get("Part1")?.asInstance {
+                    noCollidePairs.insert(PairKey(a: ObjectIdentifier(a), b: ObjectIdentifier(b)))
+                    noCollidePairs.insert(PairKey(a: ObjectIdentifier(b), b: ObjectIdentifier(a)))
+                }
+            }
+            if Self.moverClasses.contains(j.className) && j.get("Enabled")?.asBool != false {
+                movers.append(j)
+            }
         }
         var groups: [ObjectIdentifier: [Instance]] = [:]
         for p in parts { groups[find(ObjectIdentifier(p)), default: []].append(p) }
@@ -80,7 +121,14 @@ final class PhysicsWorld {
             let root = members.max { PartData.size($0).magnitude < PartData.size($1).magnitude }!
             let b = Body(root: root, parts: members)
             b.mass = max(0.01, members.reduce(0) { $0 + Physics.mass($1) })
-            if let v = root.get("Velocity")?.asVector3 { b.velocity = v }
+            if let snap = members.compactMap({ savedVel[ObjectIdentifier($0)] }).first {
+                b.velocity = snap.0
+                b.angularVelocity = snap.1
+                b.asleep = snap.2
+            } else {
+                if let v = root.get("Velocity")?.asVector3 { b.velocity = v }
+                if let av = root.get("RotVelocity")?.asVector3 { b.angularVelocity = av }
+            }
             bodies.append(b)
             for m in members { bodyOf[ObjectIdentifier(m)] = b }
         }
@@ -174,9 +222,163 @@ final class PhysicsWorld {
 
     // MARK: simulation
 
+    func rotateBody(_ b: Body, around pivot: Vector3, yawDelta: Float) {
+        guard abs(yawDelta) > 1e-6 else { return }
+        let rot = CFrame.ry(yawDelta)
+        for p in b.parts {
+            let cf = PartData.cframe(p)
+            let rel = cf.position - pivot
+            let newCF = (rot * cf.rotationOnly).withPosition(pivot + rot.vectorToWorld(rel))
+            PartData.setCFrame(p, newCF)
+            moved(p)
+        }
+        let vy = b.velocity.y
+        b.velocity = rot.vectorToWorld(Vector3(b.velocity.x, 0, b.velocity.z))
+        b.velocity.y = vy
+        b.asleep = false
+    }
+
+    private func targetBody(for mover: Instance) -> (Body, Instance)? {
+        if let p = mover.parent, p.isA("BasePart") { return body(of: p).map { ($0, p) } }
+        if mover.isA("Constraint"), let p = mover.get("Attachment0")?.asInstance?.parent, p.isA("BasePart") {
+            return body(of: p).map { ($0, p) }
+        }
+        return nil
+    }
+
+    private func driveAxis(_ pred: Float, _ want: Float, _ maxF: Float, _ mass: Float, _ dt: Float) -> Float {
+        let need = (want - pred) * mass / max(dt, 1e-4)
+        let applied = max(-maxF, min(maxF, need))
+        return pred + applied * dt / max(mass, 0.01)
+    }
+
+    private func applyMovers(_ dt: Float, gravity: Float) {
+        guard !movers.isEmpty else { return }
+        let grav = Vector3(0, -gravity * dt, 0)
+        for m in movers {
+            guard m.parent != nil, m.get("Enabled")?.asBool != false, let (b, part) = targetBody(for: m) else { continue }
+            switch m.className {
+            case "BodyVelocity":
+                let want = m.get("Velocity")?.asVector3 ?? .zero
+                let mf = m.get("MaxForce")?.asVector3 ?? Vector3(4000, 4000, 4000)
+                let pred = b.velocity + grav
+                let nv = Vector3(
+                    driveAxis(pred.x, want.x, mf.x, b.mass, dt),
+                    driveAxis(pred.y, want.y, mf.y, b.mass, dt),
+                    driveAxis(pred.z, want.z, mf.z, b.mass, dt))
+                b.velocity = nv - grav
+                if want.magnitude > 0.01 || mf.y > 0 { b.asleep = false; b.restTime = 0 }
+            case "LinearVelocity":
+                var want = m.get("VectorVelocity")?.asVector3 ?? .zero
+                if want == .zero, let lv = m.get("LineVelocity")?.asFloat, let dir = m.get("LineDirection")?.asVector3 {
+                    want = dir.unit * lv
+                }
+                let rel = m.get("RelativeTo")?.asEnum ?? 2
+                if rel == 0 { want = PartData.cframe(part).vectorToWorld(want) }
+                else if rel == 1, let a1 = m.get("Attachment1")?.asInstance?.parent, a1.isA("BasePart") {
+                    want = PartData.cframe(a1).vectorToWorld(want)
+                }
+                let maxF = m.get("MaxForce")?.asFloat ?? 1000
+                let pred = b.velocity + grav
+                b.velocity = Vector3(
+                    driveAxis(pred.x, want.x, maxF, b.mass, dt),
+                    driveAxis(pred.y, want.y, maxF, b.mass, dt),
+                    driveAxis(pred.z, want.z, maxF, b.mass, dt)) - grav
+                if want.magnitude > 0.01 { b.asleep = false; b.restTime = 0 }
+            case "BodyForce":
+                let f = m.get("Force")?.asVector3 ?? .zero
+                b.velocity += f * (dt / max(b.mass, 0.01))
+                if f.magnitude > 0.1 { b.asleep = false; b.restTime = 0 }
+            case "BodyThrust":
+                let f = PartData.cframe(part).vectorToWorld(m.get("Force")?.asVector3 ?? .zero)
+                b.velocity += f * (dt / max(b.mass, 0.01))
+                if f.magnitude > 0.1 { b.asleep = false; b.restTime = 0 }
+            case "VectorForce":
+                var f = m.get("Force")?.asVector3 ?? .zero
+                let rel = m.get("RelativeTo")?.asEnum ?? 0
+                if rel == 0 { f = PartData.cframe(part).vectorToWorld(f) }
+                else if rel == 1, let a1 = m.get("Attachment1")?.asInstance?.parent, a1.isA("BasePart") {
+                    f = PartData.cframe(a1).vectorToWorld(f)
+                }
+                b.velocity += f * (dt / max(b.mass, 0.01))
+                if f.magnitude > 0.1 { b.asleep = false; b.restTime = 0 }
+            case "BodyPosition":
+                let target = m.get("Position")?.asVector3 ?? PartData.cframe(part).position
+                let mf = m.get("MaxForce")?.asVector3 ?? Vector3(4000, 4000, 4000)
+                let pGain = min((m.get("P")?.asFloat ?? 10000) / max(m.get("D")?.asFloat ?? 1250, 1), 20)
+                let want = (target - PartData.cframe(part).position) * pGain
+                let pred = b.velocity + grav
+                b.velocity = Vector3(
+                    driveAxis(pred.x, want.x, mf.x, b.mass, dt),
+                    driveAxis(pred.y, want.y, mf.y, b.mass, dt),
+                    driveAxis(pred.z, want.z, mf.z, b.mass, dt)) - grav
+                b.asleep = false; b.restTime = 0
+            case "AlignPosition":
+                let target: Vector3 = {
+                    if let a1 = m.get("Attachment1")?.asInstance, let p1 = a1.parent, p1.isA("BasePart") {
+                        return (PartData.cframe(p1) * (a1.get("CFrame")?.asCFrame ?? .identity)).position
+                    }
+                    return m.get("Position")?.asVector3 ?? PartData.cframe(part).position
+                }()
+                let maxV = m.get("MaxVelocity")?.asFloat ?? 100
+                let maxF = m.get("MaxForce")?.asFloat ?? 10000
+                let dVec = target - PartData.cframe(part).position
+                let want = dVec.magnitude > 0.05 ? dVec.unit * min(maxV, dVec.magnitude * 10) : .zero
+                let pred = b.velocity + grav
+                b.velocity = Vector3(
+                    driveAxis(pred.x, want.x, maxF, b.mass, dt),
+                    driveAxis(pred.y, want.y, maxF, b.mass, dt),
+                    driveAxis(pred.z, want.z, maxF, b.mass, dt)) - grav
+                b.asleep = false; b.restTime = 0
+            case "BodyAngularVelocity", "AngularVelocity":
+                var want = m.get("AngularVelocity")?.asVector3 ?? .zero
+                if m.className == "AngularVelocity", (m.get("RelativeTo")?.asEnum ?? 2) == 0 {
+                    want = PartData.cframe(part).vectorToWorld(want)
+                }
+                b.angularVelocity = want
+                if want.magnitude > 0.01 { b.asleep = false; b.restTime = 0 }
+            case "BodyGyro", "AlignOrientation":
+                let tcf: CFrame? = {
+                    if m.className == "AlignOrientation",
+                       let a1 = m.get("Attachment1")?.asInstance, let p1 = a1.parent, p1.isA("BasePart") {
+                        return PartData.cframe(p1) * (a1.get("CFrame")?.asCFrame ?? .identity)
+                    }
+                    return m.get("CFrame")?.asCFrame
+                }()
+                if let tcf {
+                    let curYaw = PartData.cframe(part).toOrientation.y
+                    let tgtYaw = tcf.toOrientation.y
+                    var diff = (tgtYaw - curYaw).truncatingRemainder(dividingBy: 2 * .pi)
+                    if diff > .pi { diff -= 2 * .pi } else if diff < -.pi { diff += 2 * .pi }
+                    b.angularVelocity.y = max(-8, min(8, diff * 8))
+                    if abs(diff) > 0.01 { b.asleep = false }
+                }
+            case "RocketPropulsion":
+                let target: Vector3 = {
+                    if let t = m.get("Target")?.asInstance, t.isA("BasePart") { return PartData.cframe(t).position }
+                    return m.get("TargetOffset")?.asVector3 ?? .zero
+                }()
+                let dVec = target - PartData.cframe(part).position
+                let want = dVec.magnitude > 0.5 ? dVec.unit * (m.get("MaxSpeed")?.asFloat ?? 30) : .zero
+                let mf = m.get("MaxThrust")?.asFloat ?? 4000
+                let pred = b.velocity + grav
+                b.velocity = Vector3(
+                    driveAxis(pred.x, want.x, mf, b.mass, dt),
+                    driveAxis(pred.y, want.y, mf, b.mass, dt),
+                    driveAxis(pred.z, want.z, mf, b.mass, dt)) - grav
+                b.asleep = false; b.restTime = 0
+            default: break
+            }
+        }
+    }
+
     func step(_ dt: Float, gravity: Float, exclude: Instance?) {
+        applyMovers(dt, gravity: gravity)
         for b in bodies where !b.asleep {
             guard b.root.parent != nil else { continue }
+            if abs(b.angularVelocity.y) > 1e-4 {
+                rotateBody(b, around: PartData.cframe(b.root).position, yawDelta: b.angularVelocity.y * dt)
+            }
             b.velocity.y -= gravity * dt
             let move = b.velocity * dt
             for p in b.parts { PartData.setCFrame(p, PartData.cframe(p) + move) }
@@ -187,6 +389,7 @@ final class PhysicsWorld {
                 for p in b.parts where p.get("CanCollide")?.asBool != false {
                     for o in query(Geometry.aabb(p)) where bodyOf[ObjectIdentifier(o)] !== b && o.get("CanCollide")?.asBool != false {
                         if characterParts.contains(ObjectIdentifier(o)) { continue }
+                        if noCollidePairs.contains(PairKey(a: ObjectIdentifier(p), b: ObjectIdentifier(o))) { continue }
                         guard Physics.collidable(p.get("CollisionGroup")?.asString ?? "Default", o.get("CollisionGroup")?.asString ?? "Default") else { continue }
                         guard let (n, depth) = penetration(p, o) else { continue }
                         let fix = n * depth
@@ -195,21 +398,54 @@ final class PhysicsWorld {
                         if vn < 0 {
                             let e = PhysicsMaterials.props(PartData.material(p)).2
                             b.velocity -= n * (vn * (1 + (abs(vn) > 8 ? e : 0)))
-                            // Friction on the tangent.
-                            let f = PhysicsMaterials.props(PartData.material(p)).1
-                            let tangent = b.velocity - n * b.velocity.dot(n)
-                            b.velocity -= tangent * min(1, f * 4 * dt * 10)
+                            if !(b.driven && n.y > 0.35) {
+                                let f = PhysicsMaterials.props(PartData.material(p)).1
+                                let tangent = b.velocity - n * b.velocity.dot(n)
+                                b.velocity -= tangent * min(1, f * 4 * dt * 10)
+                            }
                         }
-                        if n.y > 0.6 { onGround = true }
+                        if n.y > 0.45 { onGround = true }
                         pushed = true
                     }
                 }
                 if !pushed { break }
             }
+            if let grid = terrainGrid {
+                var lo = Vector3(.greatestFiniteMagnitude, .greatestFiniteMagnitude, .greatestFiniteMagnitude), hi = -lo
+                var hasCol = false
+                for p in b.parts where p.get("CanCollide")?.asBool != false {
+                    let (a, z) = Geometry.aabb(p)
+                    lo = lo.min(a); hi = hi.max(z); hasCol = true
+                }
+                if hasCol {
+                    let probes = [
+                        Vector3((lo.x + hi.x) * 0.5, lo.y, (lo.z + hi.z) * 0.5),
+                        Vector3(lo.x, lo.y, lo.z), Vector3(hi.x, lo.y, lo.z),
+                        Vector3(lo.x, lo.y, hi.z), Vector3(hi.x, lo.y, hi.z),
+                    ]
+                    var bestLift: Float = 0
+                    for pr in probes {
+                        if let h = TerrainMesher.raycast(grid, origin: Vector3(pr.x, lo.y + 2.5, pr.z), dir: Vector3(0, -1, 0), maxDist: 2.6) {
+                            let lift = h.point.y - lo.y
+                            if lift > bestLift { bestLift = lift }
+                        }
+                    }
+                    if bestLift > 1e-4 {
+                        for q in b.parts { PartData.setCFrame(q, PartData.cframe(q) + Vector3(0, bestLift, 0)) }
+                        if b.velocity.y < 0 { b.velocity.y = 0 }
+                        onGround = true
+                    }
+                }
+            }
+            b.grounded = onGround
             for p in b.parts { moved(p) }
-            if onGround && b.velocity.magnitude < 0.3 {
+            b.root.set("Velocity", .vector3(b.velocity), notify: false)
+            b.root.set("RotVelocity", .vector3(b.angularVelocity), notify: false)
+            let wasDriven = b.driven
+            b.driven = false
+            if onGround && !wasDriven && b.velocity.magnitude < 0.3 && b.angularVelocity.magnitude < 0.05 {
                 b.restTime += dt
-                if b.restTime > 1 { b.asleep = true; b.velocity = .zero }
+                if b.restTime > 1 { b.asleep = true; b.velocity = .zero; b.angularVelocity = .zero }
             } else { b.restTime = 0 }
         }
     }

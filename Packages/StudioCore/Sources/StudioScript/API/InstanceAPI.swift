@@ -115,14 +115,32 @@ final class InstanceAPI {
             case "Shape": return .object(.enumItem(ScriptEnums.item("PartType", value: PartData.shape(inst).rawValue)!))
             case "Velocity", "AssemblyLinearVelocity":
                 return .object(.vector3(rt.host?.velocity(of: inst) ?? inst.get("Velocity")?.asVector3 ?? .zero))
-            case "RotVelocity", "AssemblyAngularVelocity": return .object(.vector3(inst.get("RotVelocity")?.asVector3 ?? .zero))
-            case "Mass", "AssemblyMass": return .number(Double(Physics.mass(inst)))
-            case "AssemblyRootPart": return .object(.instance(inst))
+            case "RotVelocity", "AssemblyAngularVelocity":
+                return .object(.vector3(rt.host?.angularVelocity(of: inst) ?? inst.get("RotVelocity")?.asVector3 ?? .zero))
+            case "Mass": return .number(Double(Physics.mass(inst)))
+            case "AssemblyMass": return .number(Double(rt.host?.assemblyMass(of: inst) ?? Physics.mass(inst)))
+            case "AssemblyRootPart": return .object(.instance(rt.host?.assemblyRoot(of: inst) ?? inst))
             case "AssemblyCenterOfMass", "CenterOfMass": return .object(.vector3(PartData.cframe(inst).position))
             case "PivotOffset": return .object(.cframe(inst.get("PivotOffset")?.asCFrame ?? .identity))
             case "ExtentsCFrame": return .object(.cframe(PartData.cframe(inst)))
             case "ResizeIncrement": return .number(1)
             case "ReceiveAge": return .number(0)
+            default: break
+            }
+        }
+        if inst.className == "Attachment" {
+            let localCF = inst.get("CFrame")?.asCFrame ?? .identity
+            let parentCF = (inst.parent?.isA("BasePart") == true) ? PartData.cframe(inst.parent!) : .identity
+            let worldCF = parentCF * localCF
+            switch name {
+            case "WorldCFrame": return .object(.cframe(worldCF))
+            case "WorldPosition": return .object(.vector3(worldCF.position))
+            case "WorldAxis": return .object(.vector3(worldCF.rightVector))
+            case "WorldSecondaryAxis": return .object(.vector3(worldCF.upVector))
+            case "Position": return .object(.vector3(localCF.position))
+            case "Orientation": return .object(.vector3(localCF.toOrientation * (180 / .pi)))
+            case "Axis": return .object(.vector3(localCF.rightVector))
+            case "SecondaryAxis": return .object(.vector3(localCF.upVector))
             default: break
             }
         }
@@ -306,7 +324,7 @@ final class InstanceAPI {
                 return
             case "RotVelocity", "AssemblyAngularVelocity":
                 guard case .object(.vector3(let vel)) = v else { throw LuaError("Unable to assign property \(key). Vector3 expected") }
-                inst.set("RotVelocity", .vector3(vel))
+                if let h = rt.host { h.setAngularVelocity(of: inst, vel) } else { inst.set("RotVelocity", .vector3(vel)) }
                 return
             case "Shape":
                 let n: Int
@@ -318,6 +336,26 @@ final class InstanceAPI {
                 }
                 inst.set("shape", .enumValue(EnumValue(UInt32(max(0, n)))))
                 return
+            default: break
+            }
+        }
+        if inst.className == "Attachment" {
+            let localCF = inst.get("CFrame")?.asCFrame ?? .identity
+            let parentCF = (inst.parent?.isA("BasePart") == true) ? PartData.cframe(inst.parent!) : .identity
+            switch key {
+            case "Position":
+                guard case .object(.vector3(let p)) = v else { throw LuaError("Unable to assign property Position. Vector3 expected") }
+                inst.set("CFrame", .cframe(localCF.withPosition(p))); return
+            case "Orientation":
+                guard case .object(.vector3(let d)) = v else { throw LuaError("Unable to assign property Orientation. Vector3 expected") }
+                let r = d * (.pi / 180)
+                inst.set("CFrame", .cframe(CFrame.fromOrientation(r.x, r.y, r.z).withPosition(localCF.position))); return
+            case "WorldCFrame":
+                guard case .object(.cframe(let wcf)) = v else { throw LuaError("Unable to assign property WorldCFrame. CFrame expected") }
+                inst.set("CFrame", .cframe(parentCF.inverse * wcf)); return
+            case "WorldPosition":
+                guard case .object(.vector3(let wp)) = v else { throw LuaError("Unable to assign property WorldPosition. Vector3 expected") }
+                inst.set("CFrame", .cframe(localCF.withPosition(parentCF.pointToObject(wp)))); return
             default: break
             }
         }
@@ -628,6 +666,8 @@ enum Methods {
         "Tool": ["Activate", "Deactivate"],
         "ParticleEmitter": ["Emit", "Clear"],
         "ProximityPrompt": ["InputHoldBegin", "InputHoldEnd"],
+        "Seat": ["Sit"],
+        "VehicleSeat": ["Sit"],
         "ClickDetector": [],
         "ValueBase": [],
         "Explosion": [],
@@ -656,6 +696,23 @@ enum Defaults {
             case "CollisionGroup": return .string("Default")
             case "CustomPhysicalProperties": return .nil_
             default: break
+            }
+        }
+        if inst.className == "Seat" || inst.className == "VehicleSeat" {
+            switch key {
+            case "Disabled": return .bool(false)
+            case "Occupant": return .nil_
+            default: break
+            }
+            if inst.className == "VehicleSeat" {
+                switch key {
+                case "HeadsUpDisplay": return .bool(true)
+                case "MaxSpeed": return .number(25)
+                case "Torque": return .number(10)
+                case "TurnSpeed": return .number(1)
+                case "Throttle", "ThrottleFloat", "Steer", "SteerFloat", "AreHingesDetected": return .number(0)
+                default: break
+                }
             }
         }
         if inst.className == "Humanoid" {

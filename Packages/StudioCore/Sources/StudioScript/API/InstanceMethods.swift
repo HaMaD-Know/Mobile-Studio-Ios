@@ -109,15 +109,27 @@ enum PhysicalAPI {
             case "GetMass": c.push(Physics.mass(inst)); return 1
             case "GetRootPart": c.push(inst); return 1
             case "GetConnectedParts", "GetJoints":
-                let joints = rt.dm.descendants().filter { j in
-                    (j.isA("JointInstance") || j.className == "WeldConstraint") &&
-                        [j.get("Part0")?.asInstance, j.get("Part1")?.asInstance, j.get("Part0Internal")?.asInstance, j.get("Part1Internal")?.asInstance]
-                        .contains { $0 === inst }
+                let constraintJoints: Set<String> = [
+                    "RigidConstraint", "HingeConstraint", "BallSocketConstraint", "CylindricalConstraint",
+                    "PrismaticConstraint", "UniversalConstraint", "TorsionSpringConstraint", "PlaneConstraint", "SpringConstraint",
+                ]
+                func endpoints(_ j: Instance) -> [Instance?] {
+                    if j.isA("JointInstance") || j.className == "WeldConstraint" {
+                        return [j.get("Part0")?.asInstance, j.get("Part1")?.asInstance,
+                                j.get("Part0Internal")?.asInstance, j.get("Part1Internal")?.asInstance]
+                    }
+                    if constraintJoints.contains(j.className) && j.get("Enabled")?.asBool != false {
+                        let a0 = j.get("Attachment0")?.asInstance?.parent
+                        let a1 = j.get("Attachment1")?.asInstance?.parent
+                        return [a0, a1]
+                    }
+                    return []
                 }
+                let joints = rt.dm.descendants().filter { endpoints($0).contains { $0 === inst } }
                 if m == "GetJoints" { c.pushArray(joints) { c.push($0) }; return 1 }
                 var parts: [Instance] = [inst]
                 for j in joints {
-                    for p in [j.get("Part0")?.asInstance, j.get("Part1")?.asInstance, j.get("Part0Internal")?.asInstance, j.get("Part1Internal")?.asInstance] {
+                    for p in endpoints(j) {
                         if let p, !parts.contains(where: { $0 === p }) { parts.append(p) }
                     }
                 }
@@ -148,7 +160,8 @@ enum PhysicalAPI {
             case "IsGrounded": c.push(inst.get("Anchored")?.asBool == true); return 1
             case "BreakJoints":
                 for j in rt.dm.descendants() where (j.isA("JointInstance") || j.className == "WeldConstraint") &&
-                    [j.get("Part0")?.asInstance, j.get("Part1")?.asInstance].contains(where: { $0 === inst }) { j.destroy() }
+                    [j.get("Part0")?.asInstance, j.get("Part1")?.asInstance,
+                     j.get("Part0Internal")?.asInstance, j.get("Part1Internal")?.asInstance].contains(where: { $0 === inst }) { j.destroy() }
                 return 0
             case "GetPivot": c.push(ModelMath.pivot(inst)); return 1
             case "PivotTo": ModelMath.pivotTo(inst, try c.checkCFrame(2, m)); return 0
@@ -337,6 +350,8 @@ enum HumanoidAPI {
         case ("Player", "GetFriendsOnline"), ("Player", "GetJoinData"): lua_createtable(c.L, 0, 0); return 1
         case ("Player", "ClearCharacterAppearance"), ("Player", "RequestStreamAroundAsync"): return 0
 
+        case ("Seat", "Sit"), ("VehicleSeat", "Sit"):
+            rt.host?.sit(inst, try c.checkInstance(2, m)); return 0
         case ("Tool", "Activate"): rt.fire(inst, "Activated"); return 0
         case ("Tool", "Deactivate"): rt.fire(inst, "Deactivated"); return 0
         default: return nil

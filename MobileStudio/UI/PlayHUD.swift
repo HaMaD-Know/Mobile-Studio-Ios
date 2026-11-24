@@ -42,7 +42,24 @@ struct PlayHUD: View {
                         .frame(width: 150, height: 150)
                         .padding(.leading, 20)
                     Spacer()
-                    toolbar
+                    VStack(spacing: 8) {
+                        if play.seatedVehicle != nil {
+                            HStack(spacing: 12) {
+                                Image(systemName: "car.fill").foregroundStyle(.white.opacity(0.9))
+                                Text("\(Int(play.vehicleSpeed.rounded())) studs/s")
+                                    .font(.system(size: 13, weight: .semibold).monospacedDigit())
+                                    .foregroundStyle(.white)
+                                Button("Exit") { play.requestJump() }
+                                    .font(.system(size: 12, weight: .bold))
+                                    .padding(.horizontal, 10).padding(.vertical, 4)
+                                    .background(Color.white.opacity(0.22), in: Capsule())
+                                    .foregroundStyle(.white)
+                            }
+                            .padding(.horizontal, 14).padding(.vertical, 7)
+                            .background(Color.black.opacity(0.55), in: Capsule())
+                        }
+                        toolbar
+                    }
                     Spacer()
                     VStack(spacing: 14) {
                         ForEach(play.actions.keys.sorted(), id: \.self) { name in

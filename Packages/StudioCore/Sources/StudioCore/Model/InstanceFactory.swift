@@ -122,7 +122,17 @@ public enum InstanceFactory {
             s(n, .enumValue(EnumValue(0)))
         }
         switch cls {
-        case "Part", "Seat", "SpawnLocation": s("shape", .enumValue(EnumValue(1)))
+        case "Part", "SpawnLocation": s("shape", .enumValue(EnumValue(1)))
+        case "Seat":
+            s("shape", .enumValue(EnumValue(1)))
+            s("Disabled", .bool(false)); s("Occupant", .ref(nil))
+        case "VehicleSeat":
+            s("shape", .enumValue(EnumValue(1)))
+            s("Disabled", .bool(false)); s("Occupant", .ref(nil))
+            s("MaxSpeed", .float(25)); s("Torque", .float(10)); s("TurnSpeed", .float(1))
+            s("Throttle", .int(0)); s("ThrottleFloat", .float(0))
+            s("Steer", .int(0)); s("SteerFloat", .float(0))
+            s("HeadsUpDisplay", .bool(true))
         case "TrussPart": s("size", .vector3(Vector3(2, 10, 2)))
         case "MeshPart": s("MeshId", .string("")); s("TextureID", .string(""))
         default: break

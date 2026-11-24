@@ -216,4 +216,144 @@ final class StudioScriptTests: XCTestCase {
         XCTAssertGreaterThan(PartData.cframe(head).position.y, PartData.cframe(torso).position.y + 2.5)
         EditAnimation.shared.clear()
     }
+
+    func testVehicleSeatCarDrivingAndMovers() throws {
+        let dm = PlaceFactory.newPlace(.empty)
+        let ws = dm.workspace
+
+        let floor = InstanceFactory.create("Part")
+        floor.name = "Floor"
+        floor.set("Anchored", .bool(true), notify: false)
+        floor.set("size", .vector3(Vector3(300, 2, 300)), notify: false)
+        floor.set("CFrame", .cframe(.at(Vector3(0, -1, 0))), notify: false)
+        floor.attachRaw(ws)
+
+        let car = InstanceFactory.create("Model")
+        car.name = "Car"
+        car.attachRaw(ws)
+
+        let chassis = InstanceFactory.create("Part")
+        chassis.name = "Chassis"
+        chassis.set("size", .vector3(Vector3(4, 1, 8)), notify: false)
+        chassis.set("CFrame", .cframe(.at(Vector3(20, 3, 0))), notify: false)
+        chassis.attachRaw(car)
+
+        let seat = InstanceFactory.create("VehicleSeat")
+        seat.name = "DriveSeat"
+        seat.set("size", .vector3(Vector3(2, 1, 2)), notify: false)
+        seat.set("CFrame", .cframe(.at(Vector3(20, 4, 0))), notify: false)
+        seat.set("MaxSpeed", .float(30), notify: false)
+        seat.set("Torque", .float(20), notify: false)
+        seat.set("TurnSpeed", .float(2), notify: false)
+        seat.attachRaw(car)
+
+        let seatWeld = InstanceFactory.create("WeldConstraint")
+        seatWeld.set("Part0", .ref(chassis), notify: false)
+        seatWeld.set("Part1", .ref(seat), notify: false)
+        seatWeld.attachRaw(seat)
+
+        let wheelOffsets = [
+            ("WheelFL", Vector3(-2.5, -1, -2.5)),
+            ("WheelFR", Vector3(2.5, -1, -2.5)),
+            ("WheelRL", Vector3(-2.5, -1, 2.5)),
+            ("WheelRR", Vector3(2.5, -1, 2.5)),
+        ]
+        for (wName, off) in wheelOffsets {
+            let wheel = InstanceFactory.create("Part")
+            wheel.name = wName
+            wheel.set("size", .vector3(Vector3(2, 2, 2)), notify: false)
+            wheel.set("CFrame", .cframe(.at(Vector3(20, 3, 0) + off)), notify: false)
+            wheel.attachRaw(car)
+
+            let a0 = InstanceFactory.create("Attachment")
+            a0.name = "Mount"
+            a0.set("CFrame", .cframe(.at(off)), notify: false)
+            a0.attachRaw(chassis)
+
+            let a1 = InstanceFactory.create("Attachment")
+            a1.name = "Axle"
+            a1.attachRaw(wheel)
+
+            let hinge = InstanceFactory.create("HingeConstraint")
+            hinge.set("Attachment0", .ref(a0), notify: false)
+            hinge.set("Attachment1", .ref(a1), notify: false)
+            hinge.attachRaw(chassis)
+        }
+
+        let moverPart = InstanceFactory.create("Part")
+        moverPart.name = "MoverBox"
+        moverPart.set("size", .vector3(Vector3(2, 2, 2)), notify: false)
+        moverPart.set("CFrame", .cframe(.at(Vector3(-30, 5, 0))), notify: false)
+        moverPart.attachRaw(ws)
+
+        let bv = InstanceFactory.create("BodyVelocity")
+        bv.set("Velocity", .vector3(Vector3(20, 0, 0)), notify: false)
+        bv.set("MaxForce", .vector3(Vector3(5000, 5000, 5000)), notify: false)
+        bv.attachRaw(moverPart)
+
+        let play = PlaySession(editModel: dm)
+        var errors: [String] = []
+        play.onOutput = { lvl, msg in if lvl == .error { errors.append(msg) } }
+        play.start()
+        defer { play.stop() }
+
+        for _ in 0..<25 { play.step(1 / 30) }
+
+        let playCar = try XCTUnwrap(play.dm.workspace.findFirstChild("Car"))
+        let playSeat = try XCTUnwrap(playCar.findFirstChild("DriveSeat"))
+        let playWheelFL = try XCTUnwrap(playCar.findFirstChild("WheelFL"))
+        let playMover = try XCTUnwrap(play.dm.workspace.findFirstChild("MoverBox"))
+
+        // HingeConstraint holds wheels attached to the car assembly after falling onto the floor.
+        let relAfterFall = PartData.cframe(playWheelFL).position - PartData.cframe(playSeat).position
+        XCTAssertEqual(relAfterFall.x, -2.5, accuracy: 0.1)
+        XCTAssertEqual(relAfterFall.y, -2.0, accuracy: 0.1)
+        XCTAssertEqual(relAfterFall.z, -2.5, accuracy: 0.1)
+
+        // BodyVelocity drives moverPart horizontally while holding altitude.
+        XCTAssertGreaterThan(PartData.cframe(playMover).position.x, -20)
+        XCTAssertEqual(PartData.cframe(playMover).position.y, 5, accuracy: 0.5)
+
+        // Luau Attachment.WorldPosition & VehicleSeat:Sit(humanoid).
+        play.rt.runCommand("""
+        local car = workspace:FindFirstChild("Car")
+        local seat = car:FindFirstChild("DriveSeat")
+        local att = car:FindFirstChild("Chassis"):FindFirstChild("Mount")
+        assert((att.WorldPosition - car.WheelFL.Position).Magnitude < 0.05)
+        local plr = game:GetService("Players").LocalPlayer
+        local hum = plr.Character:FindFirstChildOfClass("Humanoid")
+        seat:Sit(hum)
+        assert(seat.Occupant == hum and hum.SeatPart == seat and hum.Sit == true)
+        """)
+        XCTAssertTrue(errors.isEmpty, "Unexpected Luau errors: \(errors)")
+        XCTAssertTrue(play.seatedVehicle === playSeat)
+
+        // Drive forward.
+        let startZ = PartData.cframe(playSeat).position.z
+        play.moveInput = Vector2(0, 1)
+        for _ in 0..<30 { play.step(1 / 30) }
+        XCTAssertEqual(playSeat.get("Throttle")?.asFloat ?? 0, 1, accuracy: 0.01)
+        XCTAssertEqual(playSeat.get("ThrottleFloat")?.asFloat ?? 0, 1, accuracy: 0.01)
+        XCTAssertTrue(play.keyDown("W"))
+        XCTAssertLessThan(PartData.cframe(playSeat).position.z, startZ - 5)
+
+        let root = try XCTUnwrap(play.character?.findFirstChild("HumanoidRootPart"))
+        XCTAssertLessThan((PartData.cframe(root).position - PartData.cframe(playSeat).position).magnitude, 4.0)
+
+        // Steer right while moving forward -> car lookVector turns toward +X.
+        play.moveInput = Vector2(1, 1)
+        for _ in 0..<15 { play.step(1 / 30) }
+        XCTAssertEqual(playSeat.get("Steer")?.asFloat ?? 0, 1, accuracy: 0.01)
+        XCTAssertGreaterThan(PartData.cframe(playSeat).lookVector.x, 0.2)
+
+        // Jump leaves the seat cleanly and clears throttle/steer/virtual keys.
+        play.moveInput = .zero
+        play.requestJump()
+        for _ in 0..<5 { play.step(1 / 30) }
+        XCTAssertNil(play.seatedVehicle)
+        XCTAssertNil(playSeat.get("Occupant")?.asInstance)
+        XCTAssertEqual(playSeat.get("Throttle")?.asFloat ?? -1, 0, accuracy: 0.01)
+        XCTAssertEqual(playSeat.get("Steer")?.asFloat ?? -1, 0, accuracy: 0.01)
+        XCTAssertFalse(play.keyDown("W"))
+    }
 }
