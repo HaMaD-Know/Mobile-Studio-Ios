@@ -461,17 +461,17 @@ public final class PlaySession: ScriptHost {
                 && s.get("Occupant")?.asInstance == nil
         }
         if let gp = groundPart, canUse(gp) {
-            sit(hum, gp)
+            enterSeat(hum, gp)
             return
         }
         let pos = rootCF.position
         let nearby = physics.query((pos - Vector3(1.25, 3.2, 1.25), pos + Vector3(1.25, 2.0, 1.25))).filter(canUse)
         if let closest = nearby.min(by: { (PartData.cframe($0).position - pos).magnitude < (PartData.cframe($1).position - pos).magnitude }) {
-            sit(hum, closest)
+            enterSeat(hum, closest)
         }
     }
 
-    private func sit(_ hum: Instance, _ s: Instance) {
+    private func enterSeat(_ hum: Instance, _ s: Instance) {
         seat = s
         s.set("Occupant", .ref(hum))
         hum.set("Sit", .bool(true))
@@ -1130,7 +1130,7 @@ public final class PlaySession: ScriptHost {
         if occ != nil && occ !== hum { return }
         if seat === seatPart { return }
         if seat != nil { leaveSeat(hum, jump: false) }
-        sit(hum, seatPart)
+        enterSeat(hum, seatPart)
     }
     public func humanoidMove(_ humanoid: Instance, direction: Vector3) {
         guard humanoid === self.humanoid else { return }
